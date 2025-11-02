@@ -1189,48 +1189,122 @@ impl SlotTable {
             }
         }
 
+        // if parent says "my children are unstable", don't try to be clever
+        if parent_force {
+            if let Some(Slot::Group {
+                key: existing_key,
+                len,
+                has_gap_children,
+                ..
+            }) = self.slots.get_mut(cursor)
+            {
+                if *existing_key == key {
+                    *has_gap_children = false;
+                    self.last_start_was_gap = true;
+                    let frame = GroupFrame {
+                        key,
+                        start: cursor,
+                        end: cursor + *len,
+                        force_children_recompose: true,
+                    };
+                    self.group_stack.push(frame);
+                    self.cursor = cursor + 1;
+                    self.update_group_bounds();
+                    return cursor;
+                }
+            }
+
+            if let Some(Slot::Gap {
+                anchor,
+                group_key: Some(gap_key),
+                group_scope,
+                group_len,
+            }) = self.slots.get(cursor)
+            {
+                if *gap_key == key {
+                    let anchor = *anchor;
+                    let gap_len = *group_len;
+                    let preserved_scope = *group_scope;
+                    self.slots[cursor] = Slot::Group {
+                        key,
+                        anchor,
+                        len: gap_len,
+                        scope: preserved_scope,
+                        has_gap_children: false,
+                    };
+                    self.register_anchor(anchor, cursor);
+                    self.last_start_was_gap = true;
+                    let frame = GroupFrame {
+                        key,
+                        start: cursor,
+                        end: cursor + gap_len,
+                        force_children_recompose: true,
+                    };
+                    self.group_stack.push(frame);
+                    self.cursor = cursor + 1;
+                    self.update_group_bounds();
+                    return cursor;
+                }
+            }
+
+            return self.insert_new_group_at_cursor(key);
+        }
+
         self.last_start_was_gap = false;
         let cursor = self.cursor;
-        let parent_force = self
-            .group_stack
-            .last()
-            .map(|frame| frame.force_children_recompose)
-            .unwrap_or(false);
         debug_assert!(
             cursor <= self.slots.len(),
             "slot cursor {} out of bounds",
             cursor
         );
-        // Check if we can reuse an existing Group at the cursor position
+
+        if cursor == self.slots.len() {
+            return self.insert_new_group_at_cursor(key);
+        }
+
+        if cursor > 0 && !matches!(self.slots.get(cursor), Some(Slot::Gap { .. })) {
+            if let Some(Slot::Group { key: prev_key, .. }) = self.slots.get(cursor - 1) {
+                if *prev_key == key {
+                    return self.insert_new_group_at_cursor(key);
+                }
+            }
+        }
+
+        // Check if we can reuse an existing Group at the cursor position without scanning.
+        if let Some(slot) = self.slots.get_mut(cursor) {
+            if let Slot::Group {
+                key: existing_key,
+                len,
+                has_gap_children,
+                ..
+            } = slot
+            {
+                if *existing_key == key {
+                    let group_len = *len;
+                    let had_gap_children = *has_gap_children;
+                    if had_gap_children {
+                        *has_gap_children = false;
+                    }
+                    let force_children = had_gap_children || parent_force;
+
+                    self.last_start_was_gap = false;
+                    let frame = GroupFrame {
+                        key,
+                        start: cursor,
+                        end: cursor + group_len,
+                        force_children_recompose: force_children,
+                    };
+                    self.group_stack.push(frame);
+                    self.cursor = cursor + 1;
+                    self.update_group_bounds();
+                    return cursor;
+                }
+            }
+        }
+
+        // Check if we can reuse an existing Group/GAP by converting in-place.
         let mut reused_from_gap = false;
         let reuse_result = match self.slots.get(cursor) {
-            Some(Slot::Group {
-                key: existing_key,
-                anchor,
-                len,
-                scope: _,
-                has_gap_children,
-            }) if *existing_key == key => {
-                debug_assert_eq!(*existing_key, key, "group key mismatch");
-                let mut contains_gap = false;
-                if *len > 0 {
-                    let start = cursor + 1;
-                    let end = (cursor + *len).min(self.slots.len());
-                    for idx in start..end {
-                        if matches!(self.slots.get(idx), Some(Slot::Gap { .. })) {
-                            contains_gap = true;
-                            break;
-                        }
-                    }
-                }
-                if *has_gap_children {
-                    reused_from_gap = true;
-                }
-                if contains_gap {
-                    reused_from_gap = true;
-                }
-                Some((*len, *anchor, None)) // (len, anchor, gap_scope)
-            }
             // If there's already a Group here but with a different key, mark it as a gap
             // instead of recycling it. This preserves the group so it can be found and
             // restored later (critical for the decrease-increase and tab-switching scenarios).
@@ -1335,7 +1409,10 @@ impl SlotTable {
 
         let mut search_index = cursor;
         let mut found_group: Option<(usize, AnchorId, usize, Option<ScopeId>)> = None;
-        while search_index < parent_end {
+        const SEARCH_BUDGET: usize = 64;
+        let mut scanned = 0usize;
+        while search_index < parent_end && scanned < SEARCH_BUDGET {
+            scanned += 1;
             match self.slots.get(search_index) {
                 Some(Slot::Group {
                     key: existing_key,
@@ -1466,7 +1543,10 @@ impl SlotTable {
         // matching group/gap, regardless of structure complexity.
         if found_group.is_none() && needs_extended_search {
             search_index = parent_end;
-            while search_index < self.slots.len() {
+            const EXTENDED_SEARCH_BUDGET: usize = 32;
+            let mut extended_scanned = 0usize;
+            while search_index < self.slots.len() && extended_scanned < EXTENDED_SEARCH_BUDGET {
+                extended_scanned += 1;
                 match self.slots.get(search_index) {
                     // Search for groups with matching keys (but only within limited range)
                     Some(Slot::Group {
@@ -1548,6 +1628,17 @@ impl SlotTable {
             }
         }
 
+        self.insert_new_group_at_cursor(key)
+    }
+
+    fn insert_new_group_at_cursor(&mut self, key: Key) -> usize {
+        let cursor = self.cursor;
+        let parent_force = self
+            .group_stack
+            .last()
+            .map(|frame| frame.force_children_recompose)
+            .unwrap_or(false);
+
         self.shift_group_frames(cursor, 1);
         let group_anchor = self.allocate_anchor();
         self.slots.insert(
@@ -1561,7 +1652,6 @@ impl SlotTable {
             },
         );
         self.last_start_was_gap = parent_force;
-        // Update all anchor positions after insertion
         self.shift_anchor_positions_from(cursor, 1);
         self.update_anchor_for_slot(cursor);
         self.cursor = cursor + 1;
@@ -1633,7 +1723,6 @@ impl SlotTable {
                 }
             }
         }
-        self.flush_anchors_if_dirty();
     }
 
     fn start_recompose(&mut self, index: usize) {
@@ -2616,7 +2705,11 @@ impl Composer {
             effect();
         }
         runtime_handle.drain_ui();
-        slots.borrow_mut().trim_to_cursor();
+        {
+            let mut slots_mut = slots.borrow_mut();
+            slots_mut.trim_to_cursor();
+            slots_mut.flush_anchors_if_dirty();
+        }
         Ok(result)
     }
 
@@ -3664,7 +3757,11 @@ impl<A: Applier + 'static> Composition<A> {
         }
         runtime_handle.drain_ui();
         self.root = root;
-        let _ = self.slots.borrow_mut().trim_to_cursor();
+        {
+            let mut slots = self.slots.borrow_mut();
+            let _ = slots.trim_to_cursor();
+            slots.flush_anchors_if_dirty();
+        }
         let _ = self.process_invalid_scopes()?;
         if !self.runtime.has_updates()
             && !runtime_handle.has_invalid_scopes()
