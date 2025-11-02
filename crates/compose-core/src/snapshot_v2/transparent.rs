@@ -70,36 +70,19 @@ impl TransparentObserverMutableSnapshot {
         false
     }
 
-    pub fn root_transparent_mutable(&self) -> Arc<Self> {
+    pub fn root_transparent_mutable(self: &Arc<Self>) -> Arc<Self> {
         match &self.parent {
-            Some(weak) => {
-                if let Some(parent) = weak.upgrade() {
-                    parent.root_transparent_mutable()
-                } else {
-                    TransparentObserverMutableSnapshot::new(
-                        self.state.id.get(),
-                        self.state.invalid.borrow().clone(),
-                        self.state.read_observer.clone(),
-                        self.state.write_observer.clone(),
-                        None,
-                    )
-                }
-            }
-            None => TransparentObserverMutableSnapshot::new(
-                self.state.id.get(),
-                self.state.invalid.borrow().clone(),
-                self.state.read_observer.clone(),
-                self.state.write_observer.clone(),
-                None,
-            ),
+            Some(weak) => weak
+                .upgrade()
+                .map(|parent| parent.root_transparent_mutable())
+                .unwrap_or_else(|| self.clone()),
+            None => self.clone(),
         }
     }
 
-    pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
+    pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
         let previous = current_snapshot();
-        set_current_snapshot(Some(AnySnapshot::TransparentMutable(
-            self.root_transparent_mutable(),
-        )));
+        set_current_snapshot(Some(AnySnapshot::TransparentMutable(self.clone())));
         let result = f();
         set_current_snapshot(previous);
         result
@@ -225,34 +208,19 @@ impl TransparentObserverSnapshot {
         true
     }
 
-    pub fn root_transparent_readonly(&self) -> Arc<Self> {
+    pub fn root_transparent_readonly(self: &Arc<Self>) -> Arc<Self> {
         match &self.parent {
-            Some(weak) => {
-                if let Some(parent) = weak.upgrade() {
-                    parent.root_transparent_readonly()
-                } else {
-                    TransparentObserverSnapshot::new(
-                        self.state.id.get(),
-                        self.state.invalid.borrow().clone(),
-                        self.state.read_observer.clone(),
-                        None,
-                    )
-                }
-            }
-            None => TransparentObserverSnapshot::new(
-                self.state.id.get(),
-                self.state.invalid.borrow().clone(),
-                self.state.read_observer.clone(),
-                None,
-            ),
+            Some(weak) => weak
+                .upgrade()
+                .map(|parent| parent.root_transparent_readonly())
+                .unwrap_or_else(|| self.clone()),
+            None => self.clone(),
         }
     }
 
-    pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
+    pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
         let previous = current_snapshot();
-        set_current_snapshot(Some(AnySnapshot::TransparentReadonly(
-            self.root_transparent_readonly(),
-        )));
+        set_current_snapshot(Some(AnySnapshot::TransparentReadonly(self.clone())));
         let result = f();
         set_current_snapshot(previous);
         result

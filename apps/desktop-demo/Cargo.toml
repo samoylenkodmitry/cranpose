@@ -18,3 +18,7 @@ compose-ui = { path = "../../crates/compose-ui" }
 compose-ui-graphics = { path = "../../crates/compose-ui-graphics" }
 compose-ui-layout = { path = "../../crates/compose-ui-layout" }
 env_logger = "0.10"
+
+[dev-dependencies]
+compose-macros = { path = "../../crates/compose-macros" }
+compose-testing = { path = "../../crates/compose-testing" }

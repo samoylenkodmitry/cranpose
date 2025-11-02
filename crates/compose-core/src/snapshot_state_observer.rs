@@ -1,8 +1,5 @@
 use crate::collections::map::HashSet;
-use crate::snapshot_v2::{
-    current_snapshot, register_apply_observer, AnySnapshot, GlobalSnapshot, ReadObserver,
-    StateObjectId,
-};
+use crate::snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId};
 use crate::state::StateObject;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -51,9 +48,8 @@ impl SnapshotStateObserver {
     where
         T: Any + Clone + PartialEq + 'static,
     {
-        let weak = Rc::downgrade(&self.inner);
         self.inner
-            .observe_reads(scope, on_value_changed_for_scope, block, weak)
+            .observe_reads(scope, on_value_changed_for_scope, block)
     }
 
     /// Temporarily pause read observation while executing `block`.
@@ -100,7 +96,8 @@ impl SnapshotStateObserver {
 struct SnapshotStateObserverInner {
     executor: Rc<Executor>,
     scopes: RefCell<Vec<Rc<RefCell<ScopeEntry>>>>,
-    pause_count: Cell<usize>,
+    fast_scopes: RefCell<Vec<Option<Rc<RefCell<ScopeEntry>>>>>,
+    pause_count: Rc<Cell<usize>>,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
 }
@@ -110,7 +107,8 @@ impl SnapshotStateObserverInner {
         Self {
             executor: Rc::new(on_changed_executor),
             scopes: RefCell::new(Vec::new()),
-            pause_count: Cell::new(0),
+            fast_scopes: RefCell::new(Vec::new()),
+            pause_count: Rc::new(Cell::new(0)),
             apply_handle: RefCell::new(None),
             weak_self: RefCell::new(Weak::new()),
         }
@@ -120,16 +118,11 @@ impl SnapshotStateObserverInner {
         self.weak_self.replace(weak);
     }
 
-    fn weak(&self) -> Weak<SnapshotStateObserverInner> {
-        self.weak_self.borrow().clone()
-    }
-
     fn observe_reads<T, R>(
         &self,
         scope: T,
         on_value_changed_for_scope: impl Fn(&T) + 'static,
         block: impl FnOnce() -> R,
-        weak_self: Weak<SnapshotStateObserverInner>,
     ) -> R
     where
         T: Any + Clone + PartialEq + 'static,
@@ -147,16 +140,15 @@ impl SnapshotStateObserverInner {
         entry.borrow_mut().observed.clear();
 
         let entry_for_observer = entry.clone();
+        let pause_count = self.pause_count.clone();
         let read_observer: ReadObserver = Arc::new(move |state| {
-            if let Some(inner) = weak_self.upgrade() {
-                if inner.pause_count.get() > 0 {
-                    return;
-                }
-                let mut entry = entry_for_observer.borrow_mut();
-                let id = state.object_id().as_usize();
-                if !entry.observed.iter().any(|&x| x == id) {
-                    entry.observed.push(id);
-                }
+            if pause_count.get() > 0 {
+                return;
+            }
+            let mut entry = entry_for_observer.borrow_mut();
+            let id = state.object_id().as_usize();
+            if !entry.observed.contains(&id) {
+                entry.observed.push(id);
             }
         });
 
@@ -215,6 +207,26 @@ impl SnapshotStateObserverInner {
         scope: impl Any + Clone + PartialEq + 'static,
         on_changed: Rc<dyn Fn(&dyn Any)>,
     ) -> Rc<RefCell<ScopeEntry>> {
+        if let Some(rc_scope) = (&scope as &dyn Any).downcast_ref::<RecomposeScope>() {
+            let id = rc_scope.id();
+            let mut fast = self.fast_scopes.borrow_mut();
+
+            if id >= fast.len() {
+                fast.resize_with(id + 1, || None);
+            }
+
+            if let Some(existing) = &fast[id] {
+                existing
+                    .borrow_mut()
+                    .reset(scope.clone(), on_changed.clone());
+                return existing.clone();
+            }
+
+            let entry = Rc::new(RefCell::new(ScopeEntry::new(scope, on_changed)));
+            fast[id] = Some(entry.clone());
+            return entry;
+        }
+
         let mut scopes = self.scopes.borrow_mut();
 
         if let Some(index) = scopes
@@ -292,6 +304,8 @@ impl SnapshotStateObserverInner {
 }
 
 use smallvec::SmallVec;
+use compose_core::RecomposeScope;
+
 const MAX_OBSERVED_STATES: usize = 8;
 struct ScopeEntry {
     scope: Box<dyn Any>,
@@ -309,6 +323,15 @@ impl ScopeEntry {
             on_changed,
             observed: SmallVec::new(),
         }
+    }
+
+    fn reset<T>(&mut self, new_scope: T, on_changed: Rc<dyn Fn(&dyn Any)>)
+    where
+        T: Any + 'static,
+    {
+        self.scope = Box::new(new_scope);
+        self.on_changed = on_changed;
+        self.observed.clear();
     }
 
     fn matches_scope<T>(&self, scope: &T) -> bool

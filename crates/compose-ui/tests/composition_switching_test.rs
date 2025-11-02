@@ -3,7 +3,7 @@
 //! This test reproduces a bug where switching between different composable views
 //! and clicking buttons causes content to be appended multiple times.
 
-use compose_core::MutableState;
+use compose_core::{compositionLocalOf, CompositionLocalProvider, MutableState};
 use compose_macros::composable;
 use compose_testing::ComposeTestRule;
 use compose_ui::*;
@@ -833,6 +833,117 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
         after_second_counter_click, after_switch_to_counter,
         "Clicking Counter App button twice should not duplicate"
     );
+}
+
+#[composable]
+fn test_composition_local_content_inner(local_holder: compose_core::CompositionLocal<i32>) {
+    let value = local_holder.current();
+    Text(
+        format!("READING local: count={}", value),
+        Modifier::padding(8.0),
+    );
+}
+
+#[composable]
+fn test_composition_local_content(local_holder: compose_core::CompositionLocal<i32>) {
+    Text("Outside provider (NOT reading)", Modifier::padding(8.0));
+
+    Spacer(Size {
+        width: 0.0,
+        height: 8.0,
+    });
+
+    test_composition_local_content_inner(local_holder.clone());
+
+    Spacer(Size {
+        width: 0.0,
+        height: 8.0,
+    });
+
+    Text("NOT reading local", Modifier::padding(8.0));
+}
+
+#[composable]
+fn test_composition_local_demo(
+    counter: MutableState<i32>,
+    local_holder: compose_core::CompositionLocal<i32>,
+) {
+    Column(Modifier::padding(20.0), ColumnSpec::default(), move || {
+        Text("CompositionLocal Subscription Test", Modifier::padding(8.0));
+
+        Spacer(Size {
+            width: 0.0,
+            height: 12.0,
+        });
+
+        Text(
+            format!("Counter: {}", counter.get()),
+            Modifier::padding(8.0),
+        );
+
+        Spacer(Size {
+            width: 0.0,
+            height: 12.0,
+        });
+
+        Button(
+            Modifier::padding(10.0),
+            {
+                let counter = counter.clone();
+                move || {
+                    counter.set(counter.get() + 1);
+                }
+            },
+            || {
+                Text("Increment", Modifier::padding(4.0));
+            },
+        );
+
+        Spacer(Size {
+            width: 0.0,
+            height: 12.0,
+        });
+
+        let current_count = counter.get();
+        CompositionLocalProvider(vec![local_holder.provides(current_count)], {
+            let local_holder = local_holder.clone();
+            move || {
+                test_composition_local_content(local_holder.clone());
+            }
+        });
+    });
+}
+
+#[test]
+fn composition_local_increment_keeps_node_count_stable() {
+    let mut rule = ComposeTestRule::new();
+    let runtime = rule.runtime_handle();
+
+    let counter = MutableState::with_runtime(0, runtime.clone());
+    let local_holder = compositionLocalOf(|| 0);
+
+    rule.set_content({
+        let counter = counter.clone();
+        let local_holder = local_holder.clone();
+        move || {
+            test_composition_local_demo(counter.clone(), local_holder.clone());
+        }
+    })
+    .expect("initial render succeeds");
+
+    let initial_nodes = rule.applier_mut().len();
+
+    for step in 1..=2 {
+        counter.set(counter.get() + 1);
+        rule.pump_until_idle()
+            .unwrap_or_else(|_| panic!("pump after increment {}", step));
+        let nodes = rule.applier_mut().len();
+        assert_eq!(
+            nodes, initial_nodes,
+            "node count should stay stable after increment {}",
+            step
+        );
+    }
 }
 
 #[composable]
