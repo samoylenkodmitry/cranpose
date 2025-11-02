@@ -1,11 +1,11 @@
 use crate::collections::map::HashSet;
 use crate::snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId};
 use crate::state::StateObject;
+use ahash::HashSetExt;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use ahash::HashSetExt;
 
 /// Executes a callback once changes are delivered.
 type Executor = dyn Fn(Box<dyn FnOnce() + 'static>) + 'static;
@@ -138,20 +138,33 @@ impl SnapshotStateObserverInner {
         };
 
         let entry = self.replace_scope_entry(scope, on_changed);
-        entry.borrow_mut().observed.clear();
+        {
+            let mut entry = entry.borrow_mut();
+            entry.observed.clear();
+        }
 
-        let entry_for_observer = entry.clone();
-        let pause_count = self.pause_count.clone();
-        let read_observer: ReadObserver = Arc::new(move |state| {
-            if pause_count.get() > 0 {
-                return;
+        let read_observer: ReadObserver = {
+            let existing = entry.borrow().read_observer.clone();
+            if let Some(observer) = existing {
+                observer
+            } else {
+                let entry_for_observer = entry.clone();
+                let pause_count = self.pause_count.clone();
+
+                let observer: ReadObserver = Arc::new(move |state| {
+                    if pause_count.get() > 0 {
+                        return;
+                    }
+                    let mut entry_ref = entry_for_observer.borrow_mut();
+                    let id = state.object_id().as_usize();
+                    entry_ref.observed.insert(id);
+                });
+
+                let mut entry_mut = entry.borrow_mut();
+                entry_mut.read_observer = Some(observer.clone());
+                observer
             }
-            let mut entry = entry_for_observer.borrow_mut();
-            let id = state.object_id().as_usize();
-            if !entry.observed.contains(&id) {
-                entry.observed.push(id);
-            }
-        });
+        };
 
         self.run_with_read_observer(read_observer, block)
     }
@@ -310,8 +323,8 @@ impl SnapshotStateObserverInner {
     }
 }
 
-use smallvec::SmallVec;
 use compose_core::RecomposeScope;
+use smallvec::SmallVec;
 
 enum ObservedIds {
     Small(SmallVec<StateObjectId, MAX_OBSERVED_STATES>),
@@ -323,16 +336,12 @@ impl ObservedIds {
         ObservedIds::Small(SmallVec::new())
     }
 
-    fn contains(&self, id: &StateObjectId) -> bool {
-        match self {
-            ObservedIds::Small(small) => small.contains(id),
-            ObservedIds::Large(large) => large.contains(id),
-        }
-    }
-
     fn insert(&mut self, id: StateObjectId) {
         match self {
             ObservedIds::Small(small) => {
+                if small.contains(&id) {
+                    return;
+                }
                 if small.len() < MAX_OBSERVED_STATES {
                     small.push(id);
                 } else {
@@ -350,12 +359,11 @@ impl ObservedIds {
         }
     }
 
-    fn push(&mut self, id: StateObjectId) {
-        self.insert(id);
-    }
-
     fn clear(&mut self) {
-        *self = ObservedIds::new();
+        match self {
+            ObservedIds::Small(small) => small.clear(),
+            ObservedIds::Large(large) => large.clear(),
+        }
     }
 
     fn iter(&self) -> Box<dyn Iterator<Item = &StateObjectId> + '_> {
@@ -371,6 +379,7 @@ struct ScopeEntry {
     scope: Box<dyn Any>,
     on_changed: Rc<dyn Fn(&dyn Any)>,
     observed: ObservedIds,
+    read_observer: Option<ReadObserver>,
 }
 
 impl ScopeEntry {
@@ -382,6 +391,7 @@ impl ScopeEntry {
             scope: Box::new(scope),
             on_changed,
             observed: ObservedIds::new(),
+            read_observer: None,
         }
     }
 

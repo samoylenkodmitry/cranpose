@@ -1163,11 +1163,11 @@ impl SlotTable {
 
         // === FAST PATH =======================================================
         if let Some(Slot::Group {
-                        key: existing_key,
-                        len,
-                        has_gap_children,
-                        ..
-                    }) = self.slots.get(cursor)
+            key: existing_key,
+            len,
+            has_gap_children,
+            ..
+        }) = self.slots.get(cursor)
         {
             // Only fast-path if:
             // 1) key matches

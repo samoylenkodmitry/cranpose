@@ -1,6 +1,8 @@
 use compose_core::MutableState;
 use compose_testing::ComposeTestRule;
-use desktop_app::app::{combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COMPOSITION_LOCAL_COUNTER};
+use desktop_app::app::{
+    combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COMPOSITION_LOCAL_COUNTER,
+};
 
 fn with_active_tab<F>(f: F)
 where
@@ -72,11 +74,7 @@ fn composition_local_view_duplicates_regression() {
             .unwrap_or_else(|_| panic!("pump after increment {}", step));
         rule.advance_frame(0)
             .unwrap_or_else(|_| panic!("advance frame after increment {}", step));
-        println!(
-            "tree after increment {}:\n{}",
-            step,
-            rule.dump_tree()
-        );
+        println!("tree after increment {}:\n{}", step, rule.dump_tree());
     }
 
     let after_nodes = rule.applier_mut().len();
