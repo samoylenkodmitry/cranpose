@@ -6,10 +6,11 @@
 
 use super::*;
 use crate::snapshot_v2::runtime::TestRuntimeGuard;
-use crate::state::{MutationPolicy, NeverEqual, SnapshotMutableState};
+use crate::state::{MutationPolicy, NeverEqual, SnapshotMutableState, StateRecord};
 use std::sync::Arc;
 
 fn reset_runtime() -> TestRuntimeGuard {
+    crate::snapshot_pinning::reset_pinning_table();
     reset_runtime_for_tests()
 }
 
@@ -98,6 +99,57 @@ mod tests {
         assert!(
             snap2.apply().is_failure(),
             "snap2 should fail due to conflict with snap1"
+        );
+    }
+
+    #[test]
+    fn test_conflict_detection_after_record_reuse() {
+        let _guard = reset_runtime();
+        crate::snapshot_pinning::reset_pinning_table();
+
+        let global = GlobalSnapshot::get_or_create();
+        let state = new_state(0);
+
+        const INVALID_SNAPSHOT_ID: SnapshotId = 0;
+
+        // Inject an INVALID record to force the next writable() call to reuse it.
+        let head = state.first_record();
+        let invalid_record = StateRecord::new(INVALID_SNAPSHOT_ID, -1i32, head.next());
+        head.set_next(Some(invalid_record.clone()));
+
+        let snap1 = global.take_nested_mutable_snapshot(None, None);
+        let snap2 = global.take_nested_mutable_snapshot(None, None);
+        let snap1_id = snap1.snapshot_id();
+
+        snap1.enter(|| state.set(10));
+
+        // Reused record should now belong to snap1 and match the readable record for that snapshot.
+        assert_eq!(
+            invalid_record.snapshot_id(),
+            snap1_id,
+            "Writable reuse should update the recycled record's snapshot id"
+        );
+        let snap1_invalid = snap1.invalid();
+        let readable = state.readable_record(snap1_id, &snap1_invalid);
+        assert!(
+            Arc::ptr_eq(&readable, &invalid_record),
+            "Writable reuse should provide the recycled record as the readable head for the snapshot"
+        );
+
+        snap2.enter(|| state.set(20));
+
+        assert!(
+            snap1.apply().is_success(),
+            "First snapshot should still apply successfully"
+        );
+        assert!(
+            snap2.apply().is_failure(),
+            "Second snapshot should detect the conflict after reuse"
+        );
+        assert_eq!(
+            state.get(),
+            10,
+            "Global state should reflect the winning snapshot after conflict"
         );
     }
 

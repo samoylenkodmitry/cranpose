@@ -18,12 +18,12 @@
 //! The current snapshot is stored in thread-local storage and automatically
 //! managed by the snapshot system.
 
+use crate::collections::map::HashMap; // FUTURE(no_std): replace HashMap/HashSet with arena-backed maps.
+use crate::collections::map::HashSet;
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use crate::snapshot_pinning::{self, PinHandle};
 use crate::state::StateObject;
 use std::cell::{Cell, RefCell};
-use crate::collections::map::HashMap;// FUTURE(no_std): replace HashMap/HashSet with arena-backed maps.
-use crate::collections::map::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -569,11 +569,6 @@ impl SnapshotState {
         write_observer: Option<WriteObserver>,
         runtime_tracked: bool,
     ) -> Self {
-        // Avoid interfering with unrelated pinning tests by not pinning
-        // in test builds for the v2 snapshot code path.
-        #[cfg(test)]
-        let pin_handle = crate::snapshot_pinning::PinHandle::INVALID;
-        #[cfg(not(test))]
         let pin_handle = snapshot_pinning::track_pinning(id, &invalid);
         Self {
             id: Cell::new(id),
@@ -752,7 +747,9 @@ mod tests {
             unimplemented!("Not needed for observer tests")
         }
 
-        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     #[test]
@@ -1118,7 +1115,9 @@ mod tests {
                 unimplemented!("Not needed for this test")
             }
 
-        fn as_any(&self) -> &dyn std::any::Any { self }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
         }
 
         let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);
@@ -1176,7 +1175,9 @@ mod tests {
                 unimplemented!()
             }
 
-        fn as_any(&self) -> &dyn std::any::Any { self }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
         }
 
         let state = SnapshotState::new(1, SnapshotIdSet::new(), None, None, false);

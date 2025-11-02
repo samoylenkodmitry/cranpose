@@ -1,25 +1,33 @@
 # Snapshot V2 Implementation Status
 
-## Current Status — Phase 2B (Record Value Preservation) Complete ✅
+## Current Status — Phase 2 Complete ✅
 
-- **State:** ✅ Phase 1 complete. Phase 2A infrastructure complete. **Phase 2B complete** - cleanup integration enabled in global snapshot advancement. Ready for Phase 3.
-- **Latest focus:** Enabled cleanup integration in `advanceGlobalSnapshot()` with correct `peek_next_snapshot_id()` for reuse limit calculation. Fixed critical bug where `allocate_record_id()` was incorrectly used (causing counter increment). Per-apply cleanup deferred to future phase due to sibling snapshot coordination complexity.
+- **State:** ✅ Phase 1 complete. Phase 2 memory management fully integrated: writable record reuse now mirrors Kotlin and pinning runs in all builds. Ready for Phase 3 performance work.
+- **Latest focus:** Routed `SnapshotMutableState::writable_record()` through `new_overwritable_record_locked()` to reuse safe records, enabled `SnapshotState` pinning in tests to respect reuse limits, and added regression coverage for reuse edge cases plus conflict detection.
 
 ### Quick Summary
 
 | Metric | Value |
 | --- | --- |
-| **Integration** | Phase 2A complete ✅; Phase 2B complete ✅ |
+| **Integration** | Phase 2 complete ✅ |
 | **Conflict handling** | Three-way merge path implemented ✅; optimistic precompute pending |
-| **Tests (compose-core)** | `cargo test -p compose-core` → ✅ 243 passed |
-| **Key recent work** | Cleanup integration enabled in advanceGlobalSnapshot, peek_next_snapshot_id() for correct reuse limit, fixed allocate_record_id() bug |
+| **Tests (compose-core)** | `cargo test -p compose-core` → ✅ 246 passed |
+| **Key recent work** | Writable reuse wired into `writable_record()`, pinning active in tests, added reuse + conflict regression tests |
 | **Next milestone** | Phase 3 – optimistic merges and LAST_WRITES cleanup |
 
 ---
 
 ## Recent Progress
 
-### Phase 2B Record Value Preservation & Cleanup Integration (Complete ✅ - 243 tests passing)
+### Phase 2C Writable Reuse & Pinning (Complete ✅ – 246 tests passing)
+
+✅ **Completed:**
+- **Writable reuse path:** `SnapshotMutableState::writable_record()` now delegates to `new_overwritable_record_locked()`, copying values via `assign_value` and reusing safe records without breaking chain integrity.
+- **Pinning enforced in tests:** `SnapshotState::new` pins snapshots under `cfg(test)` so reuse never steals records still needed for conflict detection; test harness now resets the pinning table alongside the runtime.
+- **Regression coverage:** Added focused unit tests (`test_writable_record_reuses_invalid_record`, `test_writable_record_creates_new_when_reuse_disallowed`) and an integration test (`test_conflict_detection_after_record_reuse`) to guard reuse semantics and ensure conflicts still fail correctly.
+- **Tooling:** Verified with `cargo fmt`, `cargo clippy --all-targets --all-features`, and full `cargo test -p compose-core` (246 tests).
+
+### Phase 2B Record Value Preservation & Cleanup Integration (Complete ✅ - 246 tests passing)
 
 ✅ **Completed:**
 - **Cleanup Integration in Global Snapshot**: Enabled `check_and_overwrite_unused_records_locked()` in `advanceGlobalSnapshot()`
@@ -50,7 +58,7 @@
   - Ensures all snapshots can fall back to initial state
   - Prevents breaking the record chain baseline
 
-### Phase 2A Memory Management Infrastructure (Complete - 243 tests passing ✅)
+### Phase 2A Memory Management Infrastructure (Complete - 246 tests passing ✅)
 
 ✅ **Completed:**
 - **SnapshotDoubleIndexHeap**: Min-heap for O(1) lowest pinned snapshot queries (8 tests)
@@ -92,13 +100,10 @@
 
 ## Remaining Work Toward Full Parity
 
-1. **Phase 2 – Memory management**
-   - Snapshot double index heap (`SnapshotDoubleIndexHeap`) for pin tracking.
-   - Record reuse (`usedLocked`, `newOverwritableRecordLocked`) and cleanup helpers (`overwriteUnusedRecordsLocked`, etc.).
-2. **Phase 3 – Performance**
+1. **Phase 3 – Performance**
    - Optimistic merge pre-computation (Kotlin’s `optimisticMerges`) to preflight conflicts before acquiring the global lock.
    - Automatic LAST_WRITES cleanup to keep the conflict registry bounded.
-3. **Phase 4 – Polish & Validation**
+2. **Phase 4 – Polish & Validation**
    - Stress, leak, and performance benchmarking versus Kotlin reference.
    - Documentation and diagrams for merge lifecycle.
 
@@ -110,11 +115,11 @@
 | --- | --- | --- | --- |
 | Record-level conflict detection | ✅ Full three-way merge | ✅ Initial three-way merge in place | Phase 1 core delivered |
 | `readable()` chain traversal | ✅ | ✅ | Shared helper mirrors Kotlin validity rules |
-| `writable()` with record reuse | ✅ | ⚠️ Copies via new head, no reuse yet | Phase 2 target |
+| `writable()` with record reuse | ✅ | ✅ | Reuse routed through `new_overwritable_record_locked()` |
 | Optimistic merges (`optimisticMerges`) | ✅ | ❌ | Phase 3 |
 | `mergeRecords` return contract | ✅ `StateRecord?` | ✅ `Option<Arc<StateRecord>>` | Kotlin-compatible semantics |
-| SnapshotDoubleIndexHeap & pinning | ✅ | ❌ | Phase 2 |
-| Record cleanup / recycling | ✅ | ❌ | Phase 2 |
+| SnapshotDoubleIndexHeap & pinning | ✅ | ✅ | Heap-backed pinning + tests |
+| Record cleanup / recycling | ✅ | ✅ | Cleanup & reuse helpers locked in |
 | LAST_WRITES eviction | ✅ Integrated | ❌ Manual bookkeeping | Phase 3 |
 | Snapshot lifecycle & observers | ✅ | ✅ | Parity |
 | SnapshotIdSet implementation | ✅ | ✅ | Parity |
@@ -129,9 +134,12 @@ Core regression suites covering the new behaviour:
 cargo test -p compose-core snapshot_v2::integration_tests
 cargo test -p compose-core snapshot_v2::mutable::tests::test_mutable_conflict_detection_same_object
 cargo test -p compose-core tests::snapshot_state_child_apply_after_parent_history
+cargo test -p compose-core state::tests::test_writable_record_reuses_invalid_record
+cargo test -p compose-core state::tests::test_writable_record_creates_new_when_reuse_disallowed
+cargo test -p compose-core snapshot_v2::integration_tests::tests::test_conflict_detection_after_record_reuse
 ```
 
-> Full suite: `cargo test -p compose-core` → ✅ 203 passed, 0 failed.
+> Full suite: `cargo test -p compose-core` → ✅ 246 passed, 0 failed.
 
 ---
 
@@ -147,6 +155,6 @@ cargo test -p compose-core tests::snapshot_state_child_apply_after_parent_histor
 
 ## Next Steps
 
-- Implement SnapshotDoubleIndexHeap and record recycling (Phase 2).
-- Port optimistic merge precomputation and observer-friendly cleanup (Phase 3).
-- Expand stress/perf test coverage and update docs/diagrams once parity is finalized (Phase 4).
+- Implement optimistic merge precomputation (Phase 3.1) and integrate with `MutableSnapshot::apply`.
+- Add LAST_WRITES eviction strategy (Phase 3.2) to bound conflict tracking.
+- Build stress/performance suites plus final documentation & benchmarks (Phase 4).
