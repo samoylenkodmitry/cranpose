@@ -5,6 +5,7 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
+use ahash::HashSetExt;
 
 /// Executes a callback once changes are delivered.
 type Executor = dyn Fn(Box<dyn FnOnce() + 'static>) + 'static;
@@ -306,11 +307,64 @@ impl SnapshotStateObserverInner {
 use smallvec::SmallVec;
 use compose_core::RecomposeScope;
 
+enum ObservedIds {
+    Small(SmallVec<StateObjectId, MAX_OBSERVED_STATES>),
+    Large(HashSet<StateObjectId>),
+}
+
+impl ObservedIds {
+    fn new() -> Self {
+        ObservedIds::Small(SmallVec::new())
+    }
+
+    fn contains(&self, id: &StateObjectId) -> bool {
+        match self {
+            ObservedIds::Small(small) => small.contains(id),
+            ObservedIds::Large(large) => large.contains(id),
+        }
+    }
+
+    fn insert(&mut self, id: StateObjectId) {
+        match self {
+            ObservedIds::Small(small) => {
+                if small.len() < MAX_OBSERVED_STATES {
+                    small.push(id);
+                } else {
+                    let mut large = HashSet::with_capacity(small.len() + 1);
+                    for existing in small.iter() {
+                        large.insert(*existing);
+                    }
+                    large.insert(id);
+                    *self = ObservedIds::Large(large);
+                }
+            }
+            ObservedIds::Large(large) => {
+                large.insert(id);
+            }
+        }
+    }
+
+    fn push(&mut self, id: StateObjectId) {
+        self.insert(id);
+    }
+
+    fn clear(&mut self) {
+        *self = ObservedIds::new();
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = &StateObjectId> + '_> {
+        match self {
+            ObservedIds::Small(small) => Box::new(small.iter()),
+            ObservedIds::Large(large) => Box::new(large.iter()),
+        }
+    }
+}
+
 const MAX_OBSERVED_STATES: usize = 8;
 struct ScopeEntry {
     scope: Box<dyn Any>,
     on_changed: Rc<dyn Fn(&dyn Any)>,
-    observed: SmallVec<StateObjectId, MAX_OBSERVED_STATES>,
+    observed: ObservedIds,
 }
 
 impl ScopeEntry {
@@ -321,7 +375,7 @@ impl ScopeEntry {
         Self {
             scope: Box::new(scope),
             on_changed,
-            observed: SmallVec::new(),
+            observed: ObservedIds::new(),
         }
     }
 
