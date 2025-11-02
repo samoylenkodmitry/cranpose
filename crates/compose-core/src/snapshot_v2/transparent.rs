@@ -81,18 +81,18 @@ impl TransparentObserverMutableSnapshot {
     }
 
     pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
-        let previous = current_snapshot();
+        let prev = current_snapshot();
 
-        if let Some(ref prev_snapshot) = previous {
-            if prev_snapshot.is_same_transparent_mutable(self) {
+        if let Some(ref snapshot) = prev {
+            if snapshot.is_same_transparent(self) {
                 return f();
             }
         }
 
         set_current_snapshot(Some(AnySnapshot::TransparentMutable(self.clone())));
-        let result = f();
-        set_current_snapshot(previous);
-        result
+        let out = f();
+        set_current_snapshot(prev);
+        out
     }
 
     pub fn take_nested_snapshot(

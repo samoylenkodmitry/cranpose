@@ -166,12 +166,17 @@ impl AnySnapshot {
         }
     }
 
+    /// Check if this snapshot refers to the same transparent snapshot.
+    pub fn is_same_transparent(&self, other: &Arc<TransparentObserverMutableSnapshot>) -> bool {
+        matches!(self, AnySnapshot::TransparentMutable(snapshot) if Arc::ptr_eq(snapshot, other))
+    }
+
     /// Check if this snapshot refers to the same transparent mutable snapshot.
     pub fn is_same_transparent_mutable(
         &self,
         other: &Arc<TransparentObserverMutableSnapshot>,
     ) -> bool {
-        matches!(self, AnySnapshot::TransparentMutable(snapshot) if Arc::ptr_eq(snapshot, other))
+        self.is_same_transparent(other)
     }
 
     /// Check if this snapshot refers to the same transparent readonly snapshot.

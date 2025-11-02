@@ -3639,6 +3639,7 @@ impl<A: Applier + 'static> Composition<A> {
             self.observer.clone(),
             self.root,
         );
+        self.observer.begin_frame();
         let (root, mut commands, side_effects) = composer.install(|composer| {
             composer.with_group(key, |_| content());
             let root = composer.root();
@@ -3729,6 +3730,7 @@ impl<A: Applier + 'static> Composition<A> {
                     self.observer.clone(),
                     self.root,
                 );
+                self.observer.begin_frame();
                 composer.install(|composer| {
                     for scope in scopes.iter() {
                         composer.recompose_group(scope);

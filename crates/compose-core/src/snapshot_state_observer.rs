@@ -53,6 +53,11 @@ impl SnapshotStateObserver {
             .observe_reads(scope, on_value_changed_for_scope, block)
     }
 
+    /// Notify the observer that a new composition frame is starting.
+    pub fn begin_frame(&self) {
+        self.inner.begin_frame();
+    }
+
     /// Temporarily pause read observation while executing `block`.
     pub fn with_no_observations<R>(&self, block: impl FnOnce() -> R) -> R {
         self.inner.with_no_observations(block)
@@ -101,6 +106,7 @@ struct SnapshotStateObserverInner {
     pause_count: Rc<Cell<usize>>,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
+    frame_version: Cell<u64>,
 }
 
 impl SnapshotStateObserverInner {
@@ -112,11 +118,17 @@ impl SnapshotStateObserverInner {
             pause_count: Rc::new(Cell::new(0)),
             apply_handle: RefCell::new(None),
             weak_self: RefCell::new(Weak::new()),
+            frame_version: Cell::new(0),
         }
     }
 
     fn set_self(&self, weak: Weak<SnapshotStateObserverInner>) {
         self.weak_self.replace(weak);
+    }
+
+    fn begin_frame(&self) {
+        let next = self.frame_version.get().wrapping_add(1);
+        self.frame_version.set(next);
     }
 
     fn observe_reads<T, R>(
@@ -128,6 +140,9 @@ impl SnapshotStateObserverInner {
     where
         T: Any + Clone + PartialEq + 'static,
     {
+        let frame_version = self.frame_version.get();
+        let has_frame_version = frame_version != 0;
+
         let on_changed: Rc<dyn Fn(&dyn Any)> = {
             let callback = Rc::new(on_value_changed_for_scope);
             Rc::new(move |scope_any: &dyn Any| {
@@ -137,24 +152,34 @@ impl SnapshotStateObserverInner {
             })
         };
 
-        let entry = self.replace_scope_entry(scope, on_changed);
+        let entry = self.get_scope_entry(scope.clone(), on_changed.clone());
 
-        if entry.borrow().is_stateless {
-            return block();
-        }
-
-        {
-            let mut entry_mut = entry.borrow_mut();
-            entry_mut.observed.clear();
-        }
+        let pause_count = self.pause_count.clone();
 
         let read_observer: ReadObserver = {
-            let existing = entry.borrow().read_observer.clone();
-            if let Some(observer) = existing {
+            let mut entry_mut = entry.borrow_mut();
+            entry_mut.update(scope, on_changed);
+
+            let already_observed =
+                has_frame_version && entry_mut.last_seen_version == frame_version;
+            if already_observed || entry_mut.is_stateless {
+                drop(entry_mut);
+                return block();
+            }
+
+            entry_mut.observed.clear();
+            entry_mut.last_seen_version = if has_frame_version {
+                frame_version
+            } else {
+                u64::MAX
+            };
+            entry_mut.is_stateless = false;
+
+            if let Some(observer) = entry_mut.read_observer.clone() {
                 observer
             } else {
                 let entry_for_observer = entry.clone();
-                let pause_count = self.pause_count.clone();
+                let pause_count = pause_count.clone();
 
                 let observer: ReadObserver = Arc::new(move |state| {
                     if pause_count.get() > 0 {
@@ -163,9 +188,9 @@ impl SnapshotStateObserverInner {
                     let mut entry_ref = entry_for_observer.borrow_mut();
                     let id = state.object_id().as_usize();
                     entry_ref.observed.insert(id);
+                    entry_ref.is_stateless = false;
                 });
 
-                let mut entry_mut = entry.borrow_mut();
                 entry_mut.read_observer = Some(observer.clone());
                 observer
             }
@@ -177,8 +202,6 @@ impl SnapshotStateObserverInner {
             let mut entry_mut = entry.borrow_mut();
             if entry_mut.observed.is_empty() {
                 entry_mut.is_stateless = true;
-            } else {
-                entry_mut.is_stateless = false;
             }
         }
 
@@ -232,7 +255,7 @@ impl SnapshotStateObserverInner {
         }
     }
 
-    fn replace_scope_entry(
+    fn get_scope_entry(
         &self,
         scope: impl Any + Clone + PartialEq + 'static,
         on_changed: Rc<dyn Fn(&dyn Any)>,
@@ -248,9 +271,6 @@ impl SnapshotStateObserverInner {
             }
 
             if let Some(existing) = &fast[id] {
-                existing
-                    .borrow_mut()
-                    .reset(scope.clone(), on_changed.clone());
                 return existing.clone();
             }
 
@@ -266,10 +286,6 @@ impl SnapshotStateObserverInner {
             .iter()
             .find(|entry| entry.borrow().matches_scope(&scope))
         {
-            // IMPORTANT: do NOT remove + push; that changes Rc and breaks other refs
-            existing
-                .borrow_mut()
-                .reset(scope.clone(), on_changed.clone());
             return existing.clone();
         }
 
@@ -404,6 +420,7 @@ struct ScopeEntry {
     observed: ObservedIds,
     read_observer: Option<ReadObserver>,
     is_stateless: bool,
+    last_seen_version: u64,
 }
 
 impl ScopeEntry {
@@ -417,16 +434,16 @@ impl ScopeEntry {
             observed: ObservedIds::new(),
             read_observer: None,
             is_stateless: false,
+            last_seen_version: u64::MAX,
         }
     }
 
-    fn reset<T>(&mut self, new_scope: T, on_changed: Rc<dyn Fn(&dyn Any)>)
+    fn update<T>(&mut self, new_scope: T, on_changed: Rc<dyn Fn(&dyn Any)>)
     where
         T: Any + 'static,
     {
         self.scope = Box::new(new_scope);
         self.on_changed = on_changed;
-        self.observed.clear();
     }
 
     fn matches_scope<T>(&self, scope: &T) -> bool
