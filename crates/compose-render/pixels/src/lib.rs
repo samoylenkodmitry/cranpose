@@ -21,7 +21,7 @@ pub struct PixelsRenderer {
 
 impl PixelsRenderer {
     pub fn new() -> Self {
-        set_text_measurer(draw::RusttypeTextMeasurer);
+        set_text_measurer(draw::CachedRusttypeTextMeasurer::new(64));
         Self {
             scene: Scene::new(),
         }

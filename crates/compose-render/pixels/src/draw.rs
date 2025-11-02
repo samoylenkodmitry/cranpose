@@ -1,5 +1,6 @@
 use once_cell::sync::Lazy;
 use rusttype::{point, Font, Scale};
+use std::sync::Mutex;
 
 use compose_ui::{Brush, TextMeasurer, TextMetrics};
 use compose_ui_graphics::{Color, Rect};
@@ -17,6 +18,23 @@ static FONT: Lazy<Font<'static>> = Lazy::new(|| {
 });
 
 pub(crate) struct RusttypeTextMeasurer;
+
+pub struct CachedRusttypeTextMeasurer {
+    cache: Mutex<TextMetricsCache>,
+}
+
+struct TextMetricsCache {
+    entries: Vec<(String, TextMetrics)>,
+    capacity: usize,
+}
+
+impl CachedRusttypeTextMeasurer {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            cache: Mutex::new(TextMetricsCache::new(capacity)),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct ClipBounds {
@@ -85,20 +103,45 @@ impl TextMeasurer for RusttypeTextMeasurer {
     }
 }
 
+impl TextMeasurer for CachedRusttypeTextMeasurer {
+    fn measure(&self, text: &str) -> TextMetrics {
+        if let Some(metrics) = self
+            .cache
+            .lock()
+            .expect("text metrics cache poisoned")
+            .get(text)
+        {
+            return metrics;
+        }
+
+        let metrics = measure_text_impl(text);
+        self.cache
+            .lock()
+            .expect("text metrics cache poisoned")
+            .insert(text, TextMetrics {
+                width: metrics.width,
+                height: metrics.height,
+            });
+        metrics
+    }
+}
+
 fn measure_text_impl(text: &str) -> TextMetrics {
     let scale = Scale::uniform(TEXT_SIZE);
     let font = &*FONT;
     let v_metrics = font.v_metrics(scale);
-    let glyphs: Vec<_> = font.layout(text, scale, point(0.0, 0.0)).collect();
-    let max_x = glyphs
-        .iter()
-        .filter_map(|g| g.pixel_bounding_box().map(|bb| bb.max.x as f32))
-        .fold(0.0, f32::max);
-    let min_x = glyphs
-        .iter()
-        .filter_map(|g| g.pixel_bounding_box().map(|bb| bb.min.x as f32))
-        .fold(f32::INFINITY, f32::min);
-    let width = if glyphs.is_empty() {
+    let origin = point(0.0, v_metrics.ascent);
+    let mut glyph_count = 0_u32;
+    let mut min_x: f32 = f32::INFINITY;
+    let mut max_x: f32 = 0.0;
+    for glyph in font.layout(text, scale, origin) {
+        glyph_count += 1;
+        if let Some(bb) = glyph.pixel_bounding_box() {
+            min_x = min_x.min(bb.min.x as f32);
+            max_x = max_x.max(bb.max.x as f32);
+        }
+    }
+    let width = if glyph_count == 0 {
         0.0
     } else if min_x.is_infinite() {
         max_x
@@ -107,6 +150,37 @@ fn measure_text_impl(text: &str) -> TextMetrics {
     };
     let height = (v_metrics.ascent - v_metrics.descent).ceil();
     TextMetrics { width, height }
+}
+
+impl TextMetricsCache {
+    fn new(capacity: usize) -> Self {
+        let capped = capacity.max(1);
+        Self {
+            entries: Vec::with_capacity(capped),
+            capacity: capped,
+        }
+    }
+
+    fn get(&mut self, text: &str) -> Option<TextMetrics> {
+        if let Some(index) = self.entries.iter().position(|(cached, _)| cached == text) {
+            let (cached_text, metrics) = self.entries.remove(index);
+            let metrics_copy = TextMetrics {
+                width: metrics.width,
+                height: metrics.height,
+            };
+            self.entries.insert(0, (cached_text, metrics));
+            Some(metrics_copy)
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, text: &str, metrics: TextMetrics) {
+        if self.entries.len() == self.capacity {
+            self.entries.pop();
+        }
+        self.entries.insert(0, (text.to_owned(), metrics));
+    }
 }
 
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
