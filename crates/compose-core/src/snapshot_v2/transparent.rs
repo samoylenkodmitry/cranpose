@@ -82,12 +82,13 @@ impl TransparentObserverMutableSnapshot {
 
     pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
         let previous = current_snapshot();
-        if previous
-            .as_ref()
-            .map_or(false, |prev| prev.ptr_eq_transparent_mutable(self))
-        {
-            return f();
+
+        if let Some(ref prev_snapshot) = previous {
+            if prev_snapshot.is_same_transparent_mutable(self) {
+                return f();
+            }
         }
+
         set_current_snapshot(Some(AnySnapshot::TransparentMutable(self.clone())));
         let result = f();
         set_current_snapshot(previous);
@@ -226,12 +227,13 @@ impl TransparentObserverSnapshot {
 
     pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
         let previous = current_snapshot();
-        if previous
-            .as_ref()
-            .map_or(false, |prev| prev.ptr_eq_transparent_readonly(self))
-        {
-            return f();
+
+        if let Some(ref prev_snapshot) = previous {
+            if prev_snapshot.is_same_transparent_readonly(self) {
+                return f();
+            }
         }
+
         set_current_snapshot(Some(AnySnapshot::TransparentReadonly(self.clone())));
         let result = f();
         set_current_snapshot(previous);

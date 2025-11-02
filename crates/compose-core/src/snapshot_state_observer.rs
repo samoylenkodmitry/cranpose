@@ -138,9 +138,14 @@ impl SnapshotStateObserverInner {
         };
 
         let entry = self.replace_scope_entry(scope, on_changed);
+
+        if entry.borrow().is_stateless {
+            return block();
+        }
+
         {
-            let mut entry = entry.borrow_mut();
-            entry.observed.clear();
+            let mut entry_mut = entry.borrow_mut();
+            entry_mut.observed.clear();
         }
 
         let read_observer: ReadObserver = {
@@ -166,7 +171,18 @@ impl SnapshotStateObserverInner {
             }
         };
 
-        self.run_with_read_observer(read_observer, block)
+        let result = self.run_with_read_observer(read_observer, block);
+
+        {
+            let mut entry_mut = entry.borrow_mut();
+            if entry_mut.observed.is_empty() {
+                entry_mut.is_stateless = true;
+            } else {
+                entry_mut.is_stateless = false;
+            }
+        }
+
+        result
     }
 
     fn with_no_observations<R>(&self, block: impl FnOnce() -> R) -> R {
@@ -359,6 +375,13 @@ impl ObservedIds {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        match self {
+            ObservedIds::Small(small) => small.is_empty(),
+            ObservedIds::Large(large) => large.is_empty(),
+        }
+    }
+
     fn clear(&mut self) {
         match self {
             ObservedIds::Small(small) => small.clear(),
@@ -380,6 +403,7 @@ struct ScopeEntry {
     on_changed: Rc<dyn Fn(&dyn Any)>,
     observed: ObservedIds,
     read_observer: Option<ReadObserver>,
+    is_stateless: bool,
 }
 
 impl ScopeEntry {
@@ -392,6 +416,7 @@ impl ScopeEntry {
             on_changed,
             observed: ObservedIds::new(),
             read_observer: None,
+            is_stateless: false,
         }
     }
 

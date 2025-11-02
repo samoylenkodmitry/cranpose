@@ -166,23 +166,17 @@ impl AnySnapshot {
         }
     }
 
-    /// Check if this snapshot is the same transparent mutable snapshot instance.
-    pub fn ptr_eq_transparent_mutable(
+    /// Check if this snapshot refers to the same transparent mutable snapshot.
+    pub fn is_same_transparent_mutable(
         &self,
         other: &Arc<TransparentObserverMutableSnapshot>,
     ) -> bool {
-        match self {
-            AnySnapshot::TransparentMutable(snapshot) => Arc::ptr_eq(snapshot, other),
-            _ => false,
-        }
+        matches!(self, AnySnapshot::TransparentMutable(snapshot) if Arc::ptr_eq(snapshot, other))
     }
 
-    /// Check if this snapshot is the same transparent readonly snapshot instance.
-    pub fn ptr_eq_transparent_readonly(&self, other: &Arc<TransparentObserverSnapshot>) -> bool {
-        match self {
-            AnySnapshot::TransparentReadonly(snapshot) => Arc::ptr_eq(snapshot, other),
-            _ => false,
-        }
+    /// Check if this snapshot refers to the same transparent readonly snapshot.
+    pub fn is_same_transparent_readonly(&self, other: &Arc<TransparentObserverSnapshot>) -> bool {
+        matches!(self, AnySnapshot::TransparentReadonly(snapshot) if Arc::ptr_eq(snapshot, other))
     }
 
     /// Enter this snapshot, making it current for the duration of the closure.
