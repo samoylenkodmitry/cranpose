@@ -1152,6 +1152,41 @@ impl SlotTable {
     }
 
     pub fn start(&mut self, key: Key) -> usize {
+        let cursor = self.cursor;
+        let parent_force = self
+            .group_stack
+            .last()
+            .map(|frame| frame.force_children_recompose)
+            .unwrap_or(false);
+
+        // === FAST PATH =======================================================
+        if let Some(Slot::Group {
+                        key: existing_key,
+                        len,
+                        has_gap_children,
+                        ..
+                    }) = self.slots.get(cursor)
+        {
+            // Only fast-path if:
+            // 1) key matches
+            // 2) there were NO gap children before
+            // 3) parent is NOT forcing children to recompose
+            if *existing_key == key && !*has_gap_children && !parent_force {
+                self.last_start_was_gap = false;
+
+                let frame = GroupFrame {
+                    key,
+                    start: cursor,
+                    end: cursor + *len,
+                    force_children_recompose: false,
+                };
+                self.group_stack.push(frame);
+                self.cursor = cursor + 1;
+                self.update_group_bounds();
+                return cursor;
+            }
+        }
+
         self.last_start_was_gap = false;
         let cursor = self.cursor;
         let parent_force = self
