@@ -1,8 +1,29 @@
 //! Chunked slot storage backend that avoids large rotate operations.
 //!
-//! This backend divides the slot array into fixed-size chunks, allowing
-//! insertions and deletions to only shift slots within or between adjacent
-//! chunks rather than rotating the entire storage.
+//! This backend divides the slot array into fixed-size chunks (256 slots each),
+//! allowing insertions and deletions to only shift slots within or between
+//! adjacent chunks rather than rotating the entire storage. This improves
+//! performance for large compositions with frequent insertions.
+//!
+//! ## Implementation Details
+//!
+//! - **Chunk size**: Fixed at 256 slots per chunk for optimal balance between
+//!   overhead and shift performance.
+//! - **Insertion strategy**: When inserting at a non-gap position, finds the
+//!   nearest gap and shifts slots to make room. Falls back to overwrite if no
+//!   gap is found nearby.
+//! - **Gap restoration**: When beginning a group at a gap slot with matching key,
+//!   restores the group with its preserved length and scope, setting
+//!   `force_children_recompose = true`.
+//! - **Anchor lifecycle**:
+//!   1. Created with `alloc_anchor()` when a slot is allocated
+//!   2. Marked dirty via `anchors_dirty = true` when slots are shifted
+//!   3. Rebuilt via `rebuild_anchors()` during `flush()`
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Better insertion performance for large compositions
+//! - **Cons**: Higher memory overhead (fixed chunk sizes), more complex indexing
 
 use crate::{
     slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId},
@@ -171,11 +192,23 @@ impl ChunkedSlotStorage {
         }
     }
 
+    /// Update all group frame bounds to include the current cursor position.
+    /// This ensures frames grow as we allocate more content than initially expected.
+    fn update_group_bounds(&mut self) {
+        for frame in &mut self.group_stack {
+            if frame.end < self.cursor {
+                frame.end = self.cursor;
+            }
+        }
+    }
+
     /// Insert a slot at the cursor position, shifting within/between chunks.
+    /// This implements proper insertion semantics: if the target is a gap, reuse it;
+    /// otherwise, shift slots to make room.
     fn insert_at_cursor(&mut self, slot: ChunkedSlot) {
         self.ensure_capacity();
 
-        // Simple implementation: just overwrite if it's a gap
+        // Fast path: if current slot is a gap (any gap, regardless of anchor), reuse it
         if let Some(existing) = self.get_slot(self.cursor) {
             if matches!(existing, ChunkedSlot::Gap { .. }) {
                 *self.get_slot_mut(self.cursor).unwrap() = slot;
@@ -185,22 +218,70 @@ impl ChunkedSlotStorage {
                         frame.end = self.cursor + 1;
                     }
                 }
+                self.anchors_dirty = true;
                 return;
             }
         }
 
-        // If not a gap, we'll just overwrite for this MVP implementation.
-        // A full implementation would shift slots and update all affected
-        // group frames and anchors.
-        if self.cursor < self.total_slots() {
+        // Need to insert: find a gap to the right and shift slots
+        if let Some(gap_pos) = self.find_gap_near_cursor() {
+            // Shift slots from cursor to gap_pos-1 to the right by 1
+            // Use shift_across_chunks for all cases (handles both same-chunk and cross-chunk)
+            self.shift_across_chunks(self.cursor, gap_pos);
+
+            // Now insert at cursor
             *self.get_slot_mut(self.cursor).unwrap() = slot;
-            // Update group end
-            if let Some(frame) = self.group_stack.last_mut() {
-                if self.cursor >= frame.end {
-                    frame.end = self.cursor + 1;
+
+            // Update all group frames that overlap with the shifted region.
+            // This assumes frames are in creation order and fully cover their ranges.
+            // Frames starting at or after cursor: shift both start and end
+            // Frames containing cursor: extend end only
+            for frame in &mut self.group_stack {
+                if frame.start >= self.cursor {
+                    frame.start += 1;
+                    frame.end += 1;
+                } else if frame.end > self.cursor {
+                    frame.end += 1;
                 }
             }
+
             self.anchors_dirty = true;
+        } else {
+            // No gap nearby: just overwrite (fallback behavior)
+            if self.cursor < self.total_slots() {
+                *self.get_slot_mut(self.cursor).unwrap() = slot;
+                if let Some(frame) = self.group_stack.last_mut() {
+                    if self.cursor >= frame.end {
+                        frame.end = self.cursor + 1;
+                    }
+                }
+                self.anchors_dirty = true;
+            }
+        }
+    }
+
+    /// Shift slots across chunks from start to end (exclusive).
+    /// Ensures capacity exists for all destination positions before shifting.
+    fn shift_across_chunks(&mut self, start: usize, end: usize) {
+        // Ensure we have capacity for the rightmost destination (end position)
+        while self.total_slots() <= end {
+            let mut chunk = Vec::with_capacity(CHUNK_SIZE);
+            chunk.resize_with(CHUNK_SIZE, ChunkedSlot::default);
+            self.chunks.push(chunk);
+        }
+
+        // Move slots one by one from end-1 down to start using mem::replace
+        for i in (start..end).rev() {
+            let (src_chunk, src_offset) = self.global_to_chunk(i);
+            let (dst_chunk, dst_offset) = self.global_to_chunk(i + 1);
+
+            // Use mem::replace to move without cloning
+            let temp = std::mem::replace(
+                &mut self.chunks[src_chunk][src_offset],
+                ChunkedSlot::default()
+            );
+            // Capacity is guaranteed by the loop above
+            self.chunks[dst_chunk][dst_offset] = temp;
         }
     }
 
@@ -234,12 +315,27 @@ impl ChunkedSlotStorage {
         self.anchors_dirty = false;
     }
 
+    /// Lookup the current position of an anchor ID.
+    /// Returns None if the anchor is not found or invalid.
+    fn lookup_anchor_position(&self, anchor_id: usize) -> Option<usize> {
+        if anchor_id < self.anchors.len() {
+            let pos = self.anchors[anchor_id];
+            if pos != usize::MAX {
+                return Some(pos);
+            }
+        }
+        None
+    }
+
     /// Find a gap slot near the cursor.
+    /// Accepts any gap slot (structural or finalized) for reuse.
     fn find_gap_near_cursor(&self) -> Option<usize> {
         // Look forward from cursor
-        for offset in 0..64 {
+        const SCAN_LIMIT: usize = 128;
+        for offset in 0..SCAN_LIMIT {
             let pos = self.cursor + offset;
             if let Some(slot) = self.get_slot(pos) {
+                // Accept any gap for reuse (regardless of anchor value)
                 if matches!(slot, ChunkedSlot::Gap { .. }) {
                     return Some(pos);
                 }
@@ -252,18 +348,62 @@ impl ChunkedSlotStorage {
     fn start_group(&mut self, key: Key) -> (usize, bool) {
         self.ensure_capacity();
 
+        // Check if current slot is already a group with matching key - reuse it
+        if let Some(slot) = self.get_slot(self.cursor) {
+            if let ChunkedSlot::Group {
+                key: existing_key,
+                len,
+                has_gap_children,
+                ..
+            } = slot
+            {
+                if *existing_key == key {
+                    // Reuse existing group
+                    let group_len = *len;
+                    let had_gap_children = *has_gap_children;
+
+                    // Clear gap children flag if present
+                    if had_gap_children {
+                        if let Some(ChunkedSlot::Group {
+                            has_gap_children: ref mut flag,
+                            ..
+                        }) = self.get_slot_mut(self.cursor)
+                        {
+                            *flag = false;
+                        }
+                    }
+
+                    let start = self.cursor;
+                    self.cursor += 1;
+                    self.group_stack.push(GroupFrame {
+                        key,
+                        start,
+                        end: start + group_len + 1,
+                        force_children_recompose: had_gap_children,
+                    });
+                    self.update_group_bounds();
+                    self.last_start_was_gap = false;
+                    return (start, false);
+                }
+            }
+        }
+
         // Check if current slot is a gap group we can restore
         if let Some(slot) = self.get_slot(self.cursor) {
             if let ChunkedSlot::Gap {
                 group_key: Some(gap_key),
                 group_scope,
                 group_len,
-                ..
+                anchor: gap_anchor,
             } = slot
             {
                 if *gap_key == key {
-                    // Restore the gap group
-                    let anchor = self.alloc_anchor();
+                    // Restore the gap group, reusing the old anchor or creating new one
+                    let anchor = if gap_anchor.is_valid() {
+                        *gap_anchor
+                    } else {
+                        self.alloc_anchor()
+                    };
                     let scope = *group_scope;
                     let len = *group_len;
                     *self.get_slot_mut(self.cursor).unwrap() = ChunkedSlot::Group {
@@ -276,13 +416,17 @@ impl ChunkedSlotStorage {
 
                     let start = self.cursor;
                     self.cursor += 1;
+                    // Set frame.end to start + len + 1 to account for the group slot itself
+                    // The group slot at `start` contains children from start+1 to start+len
                     self.group_stack.push(GroupFrame {
                         key,
                         start,
-                        end: start + len,
+                        end: start + len + 1,
                         force_children_recompose: true,
                     });
+                    self.update_group_bounds();
                     self.last_start_was_gap = true;
+                    self.anchors_dirty = true;
                     return (start, true);
                 }
             }
@@ -307,6 +451,7 @@ impl ChunkedSlotStorage {
             end: start,
             force_children_recompose: false,
         });
+        self.update_group_bounds();
         self.last_start_was_gap = false;
         (start, false)
     }
@@ -336,7 +481,34 @@ impl ChunkedSlotStorage {
     fn do_finalize_current_group(&mut self) -> bool {
         let frame_end = match self.group_stack.last() {
             Some(frame) => frame.end,
-            None => return false,
+            None => {
+                // Root-level finalization: mark everything from cursor to end as gaps
+                let total = self.total_slots();
+                if self.cursor >= total {
+                    return false;
+                }
+                let mut marked = false;
+                while self.cursor < total {
+                    if let Some(slot) = self.get_slot_mut(self.cursor) {
+                        let anchor = slot.anchor_id();
+                        let (group_key, group_scope, group_len) = match slot {
+                            ChunkedSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                            _ => (None, None, 0),
+                        };
+                        *slot = ChunkedSlot::Gap {
+                            anchor,
+                            group_key,
+                            group_scope,
+                            group_len,
+                        };
+                        marked = true;
+                    }
+                    self.cursor += 1;
+                }
+                // Mark anchors dirty so flush() rebuilds the anchor map
+                self.anchors_dirty = true;
+                return marked;
+            }
         };
 
         let mut marked = false;
@@ -451,6 +623,7 @@ impl SlotStorage for ChunkedSlotStorage {
         self.insert_at_cursor(slot);
         let slot_id = ValueSlotId::new(self.cursor);
         self.cursor += 1;
+        self.update_group_bounds();
         slot_id
     }
 

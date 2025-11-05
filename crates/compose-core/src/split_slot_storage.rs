@@ -1,9 +1,32 @@
 //! Split slot storage that separates layout from payload.
 //!
 //! This backend keeps the slot layout (groups, nodes, value references) separate
-//! from the actual payload data. This allows the layout to be overwritten with
-//! gaps without losing the associated payload, which persists until explicitly
-//! dropped.
+//! from the actual payload data stored in a HashMap. This separation allows the
+//! layout to be overwritten with gaps without losing the associated payload,
+//! enabling efficient data reuse across composition passes.
+//!
+//! ## Implementation Details
+//!
+//! - **Layout storage**: Vec of `LayoutSlot` containing structural information
+//!   (groups, nodes) and references to payload via anchor IDs.
+//! - **Payload storage**: `HashMap<anchor_id, Box<dyn Any>>` for actual data,
+//!   persisting across gap cycles.
+//! - **Value slot allocation**: Checks if existing layout slot references valid
+//!   payload with matching type. If type mismatch or missing payload, creates
+//!   new payload at the same anchor ID.
+//! - **Gap handling**: When finalizing, marks unreached layout slots as gaps
+//!   while preserving group metadata (key, scope, len). Payload remains intact.
+//! - **Anchor lifecycle**:
+//!   1. Created with `alloc_anchor()` when allocating value/group/node slots
+//!   2. Marked dirty when layout is modified
+//!   3. Rebuilt during `flush()` by scanning layout and updating anchor map
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Payload persists across gaps (better memory reuse), simpler gap
+//!   management (no need to preserve data in gap slots)
+//! - **Cons**: HashMap overhead, potential for orphaned payloads (mitigated by
+//!   debug assertions), indirection cost for payload access
 
 use crate::{
     slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId},
@@ -146,11 +169,16 @@ impl SplitSlotStorage {
             group_key: Some(gap_key),
             group_scope,
             group_len,
-            ..
+            anchor: gap_anchor,
         }) = self.layout.get(self.cursor)
         {
             if *gap_key == key {
-                let anchor = self.alloc_anchor();
+                // Reuse the gap's anchor if valid, otherwise allocate new
+                let anchor = if gap_anchor.is_valid() {
+                    *gap_anchor
+                } else {
+                    self.alloc_anchor()
+                };
                 let scope = *group_scope;
                 let len = *group_len;
                 self.layout[self.cursor] = LayoutSlot::Group {
@@ -163,13 +191,18 @@ impl SplitSlotStorage {
 
                 let start = self.cursor;
                 self.cursor += 1;
+                // Set frame.end to start + len + 1 to properly bound the group.
+                // This accounts for the group slot itself (at `start`) plus `len` children.
+                // IMPORTANT: This pairing assumes do_finalize_current_group stores the
+                // child count (not including the group slot) in group_len.
                 self.group_stack.push(GroupFrame {
                     key,
                     start,
-                    end: start + len,
+                    end: start + len + 1,
                     force_children_recompose: true,
                 });
                 self.last_start_was_gap = true;
+                self.anchors_dirty = true;
                 return (start, true);
             }
         }
@@ -210,7 +243,32 @@ impl SplitSlotStorage {
     fn do_finalize_current_group(&mut self) -> bool {
         let frame_end = match self.group_stack.last() {
             Some(frame) => frame.end,
-            None => return false,
+            None => {
+                // Root-level finalization: mark everything from cursor to end as gaps
+                if self.cursor >= self.layout.len() {
+                    return false;
+                }
+                let mut marked = false;
+                while self.cursor < self.layout.len() {
+                    let slot = &mut self.layout[self.cursor];
+                    let anchor = slot.anchor_id();
+                    let (group_key, group_scope, group_len) = match slot {
+                        LayoutSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                        _ => (None, None, 0),
+                    };
+                    *slot = LayoutSlot::Gap {
+                        anchor,
+                        group_key,
+                        group_scope,
+                        group_len,
+                    };
+                    marked = true;
+                    self.cursor += 1;
+                }
+                // Mark anchors dirty so flush() rebuilds the anchor map
+                self.anchors_dirty = true;
+                return marked;
+            }
         };
 
         let mut marked = false;
@@ -223,6 +281,8 @@ impl SplitSlotStorage {
             };
 
             // Note: We do NOT drop the payload here - it persists!
+            // IMPORTANT: group_len stores the number of children (not including the group slot).
+            // This pairs with start_group's calculation of frame.end = start + len + 1.
             *slot = LayoutSlot::Gap {
                 anchor,
                 group_key,
@@ -311,11 +371,48 @@ impl SlotStorage for SplitSlotStorage {
             // Check if payload exists and has correct type
             if let Some(data) = self.payload.get(&anchor_id) {
                 if data.is::<T>() {
+                    // Reuse existing slot with matching type
+                    let slot_id = ValueSlotId::new(self.cursor);
+                    self.cursor += 1;
+                    return slot_id;
+                } else {
+                    // Type mismatch: overwrite payload with new value
+                    self.payload.insert(anchor_id, Box::new(init()));
                     let slot_id = ValueSlotId::new(self.cursor);
                     self.cursor += 1;
                     return slot_id;
                 }
+            } else {
+                // Layout points to missing payload: create new payload
+                self.payload.insert(anchor_id, Box::new(init()));
+                let slot_id = ValueSlotId::new(self.cursor);
+                self.cursor += 1;
+                return slot_id;
             }
+        }
+
+        // Check if it's a gap we can reuse
+        if matches!(self.layout.get(self.cursor), Some(LayoutSlot::Gap { .. })) {
+            // Create new value slot in the gap
+            let anchor = self.alloc_anchor();
+            let anchor_id = anchor.0;
+
+            // Store payload
+            self.payload.insert(anchor_id, Box::new(init()));
+
+            // Store layout ref
+            self.layout[self.cursor] = LayoutSlot::ValueRef { anchor };
+
+            let slot_id = ValueSlotId::new(self.cursor);
+            self.cursor += 1;
+
+            if let Some(frame) = self.group_stack.last_mut() {
+                if self.cursor > frame.end {
+                    frame.end = self.cursor;
+                }
+            }
+            self.anchors_dirty = true;
+            return slot_id;
         }
 
         // Create new value slot

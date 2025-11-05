@@ -1,7 +1,34 @@
-//! Hierarchical slot storage where groups own their child storage.
+//! Hierarchical slot storage where groups can own isolated child storage.
 //!
-//! This backend allows each group to have its own isolated slot storage,
-//! preventing sibling groups from affecting each other during recomposition.
+//! This backend provides infrastructure for groups to have their own isolated
+//! slot storage, preventing sibling groups from affecting each other during
+//! recomposition. Currently uses a simple delegation model where all operations
+//! go to the current storage (root or child).
+//!
+//! ## Implementation Details
+//!
+//! - **Root storage**: A `SlotTable` for top-level composition
+//! - **Child storages**: `HashMap<usize, SlotTable>` for isolated subtrees
+//! - **Storage stack**: Tracks which storage is currently active, allowing
+//!   operations to be routed to the correct store
+//! - **Current implementation**: All groups use the current storage (no automatic
+//!   child allocation). Provides infrastructure for future heuristics.
+//! - **Recomposition**: `begin_recompose_at_scope` searches both root and child
+//!   stores, switching context when a scope is found in a child store
+//!
+//! ## Future Work
+//!
+//! TODO: Implement heuristic for automatic child storage allocation. Potential strategies:
+//! - Allocate child storage for groups at depth >= 2
+//! - Allocate based on specific key patterns or annotations
+//! - Provide explicit API for requesting isolated storage
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Perfect isolation between subtrees (when implemented), better
+//!   cache locality for large compositions
+//! - **Cons**: Higher memory overhead (multiple SlotTables), complexity in
+//!   managing storage lifecycle and routing
 
 use crate::{
     slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId},
@@ -11,8 +38,10 @@ use std::collections::HashMap;
 
 /// Hierarchical slot storage implementation.
 ///
-/// Groups can own their own child storage, isolating recomposition changes
-/// to only the affected subtree.
+/// Currently operates over the root SlotTable only; child storage isolation
+/// is a future extension. Infrastructure for child stores exists but is not
+/// automatically activated. Groups can potentially own their own child storage
+/// to isolate recomposition changes to only the affected subtree.
 #[derive(Default)]
 pub struct HierarchicalSlotStorage {
     /// Root storage for top-level composition.
@@ -61,11 +90,30 @@ impl HierarchicalSlotStorage {
     }
 
     /// Allocate a new child storage for a group.
-    fn alloc_child_storage(&mut self) -> usize {
+    /// Reserved for future use when implementing automatic child storage allocation.
+    #[allow(dead_code)]
+    fn alloc_child_storage(&mut self, group_id: usize) -> usize {
         let id = self.next_child_id;
         self.next_child_id += 1;
         self.child_stores.insert(id, SlotTable::new());
+
+        // Push storage frame to track that we're now operating in this child storage
+        self.storage_stack.push(StorageFrame {
+            child_store_id: Some(id),
+            group_id,
+        });
+
         id
+    }
+
+    /// Pop the storage stack when exiting a child storage.
+    #[allow(dead_code)]
+    fn pop_child_storage(&mut self) {
+        if let Some(frame) = self.storage_stack.last() {
+            if frame.child_store_id.is_some() {
+                self.storage_stack.pop();
+            }
+        }
     }
 }
 
@@ -77,11 +125,15 @@ impl SlotStorage for HierarchicalSlotStorage {
         // Begin group in current storage using trait method
         let result = SlotStorage::begin_group(self.current_storage_mut(), key);
 
-        // For this simple implementation, we don't allocate child storage
-        // automatically. A more sophisticated version would detect when
-        // to create isolated child storage based on heuristics.
+        // TODO: Implement heuristic for when to allocate child storage.
+        // Potential strategies:
+        // 1. Allocate child storage for groups at depth >= 2
+        // 2. Allocate based on specific key patterns
+        // 3. Allow explicit API to request isolated storage
         //
-        // For now, all groups share the same storage hierarchy.
+        // For now, all groups use the current storage (root or inherited child).
+        // This still allows recomposition to switch to child stores via
+        // begin_recompose_at_scope.
 
         result
     }
@@ -93,6 +145,11 @@ impl SlotStorage for HierarchicalSlotStorage {
 
     fn end_group(&mut self) {
         SlotStorage::end_group(self.current_storage_mut());
+
+        // TODO: When we implement automatic child storage allocation,
+        // we need to pop the storage_stack here when ending a group
+        // that owns a child storage. For now, this is a no-op since
+        // we don't automatically allocate child stores.
     }
 
     fn skip_current_group(&mut self) {
