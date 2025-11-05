@@ -8,6 +8,13 @@ use crate::{
     Key, NodeId, Owned, ScopeId, SlotTable,
 };
 
+/// Factory function to create a backend of the specified kind.
+///
+/// This is the main entry point for creating slot storage backends at runtime.
+pub fn make_backend(kind: SlotBackendKind) -> SlotBackend {
+    SlotBackend::new(kind)
+}
+
 /// Available slot storage backend implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotBackendKind {
@@ -226,6 +233,25 @@ impl SlotStorage for SlotBackend {
             Self::Chunked(s) => s.flush(),
             Self::Hierarchical(s) => s.flush(),
             Self::Split(s) => s.flush(),
+        }
+    }
+}
+
+// Additional debug methods not in the SlotStorage trait
+impl SlotBackend {
+    pub fn debug_dump_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
+        match self {
+            Self::Baseline(s) => s.debug_dump_groups(),
+            // Other backends don't implement these debug methods yet
+            Self::Chunked(_) | Self::Hierarchical(_) | Self::Split(_) => Vec::new(),
+        }
+    }
+
+    pub fn debug_dump_all_slots(&self) -> Vec<(usize, String)> {
+        match self {
+            Self::Baseline(s) => s.debug_dump_all_slots(),
+            // Other backends don't implement these debug methods yet
+            Self::Chunked(_) | Self::Hierarchical(_) | Self::Split(_) => Vec::new(),
         }
     }
 }

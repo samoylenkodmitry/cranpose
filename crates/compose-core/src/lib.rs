@@ -742,7 +742,7 @@ pub mod chunked_slot_storage;
 pub mod hierarchical_slot_storage;
 pub mod split_slot_storage;
 pub mod slot_backend;
-pub use slot_backend::{SlotBackend, SlotBackendKind};
+pub use slot_backend::{make_backend, SlotBackend, SlotBackendKind};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SlotTable: gap-buffer-based implementation
@@ -2601,29 +2601,25 @@ impl<'a, A: Applier + 'static> DerefMut for ApplierGuard<'a, A> {
 }
 
 pub struct SlotsHost {
-    inner: RefCell<SlotTable>,
+    inner: RefCell<SlotBackend>,
 }
 
 impl SlotsHost {
-    pub fn new(table: SlotTable) -> Self {
+    pub fn new(storage: SlotBackend) -> Self {
         Self {
-            inner: RefCell::new(table),
+            inner: RefCell::new(storage),
         }
     }
 
-    pub fn borrow(&self) -> Ref<'_, SlotTable> {
+    pub fn borrow(&self) -> Ref<'_, SlotBackend> {
         self.inner.borrow()
     }
 
-    pub fn borrow_mut(&self) -> RefMut<'_, SlotTable> {
+    pub fn borrow_mut(&self) -> RefMut<'_, SlotBackend> {
         self.inner.borrow_mut()
     }
 
-    pub fn into_inner(self) -> SlotTable {
-        self.inner.into_inner()
-    }
-
-    pub fn take(&self) -> SlotTable {
+    pub fn take(&self) -> SlotBackend {
         std::mem::take(&mut *self.inner.borrow_mut())
     }
 }
@@ -2713,11 +2709,11 @@ impl Composer {
         )
     }
 
-    fn slots(&self) -> Ref<'_, SlotTable> {
+    fn slots(&self) -> Ref<'_, SlotBackend> {
         self.core.slots.borrow()
     }
 
-    fn slots_mut(&self) -> RefMut<'_, SlotTable> {
+    fn slots_mut(&self) -> RefMut<'_, SlotBackend> {
         self.core.slots.borrow_mut()
     }
 
@@ -2851,19 +2847,24 @@ impl Composer {
     }
 
     pub fn use_value_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> usize {
-        self.slots_mut().use_value_slot(init)
+        let slot_id = self.slots_mut().alloc_value_slot(init);
+        slot_id.index()
     }
 
     pub fn read_slot_value<T: 'static>(&self, idx: usize) -> Ref<'_, T> {
-        Ref::map(self.slots(), |slots| slots.read_value(idx))
+        Ref::map(self.slots(), |slots| {
+            SlotStorage::read_value(slots, ValueSlotId::new(idx))
+        })
     }
 
     pub fn read_slot_value_mut<T: 'static>(&self, idx: usize) -> RefMut<'_, T> {
-        RefMut::map(self.slots_mut(), |slots| slots.read_value_mut(idx))
+        RefMut::map(self.slots_mut(), |slots| {
+            SlotStorage::read_value_mut(slots, ValueSlotId::new(idx))
+        })
     }
 
     pub fn write_slot_value<T: 'static>(&self, idx: usize, value: T) {
-        self.slots_mut().write_value(idx, value);
+        self.slots_mut().write_value(ValueSlotId::new(idx), value);
     }
 
     pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {
@@ -4026,7 +4027,12 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     pub fn with_runtime(applier: A, runtime: Runtime) -> Self {
-        let slots = Rc::new(SlotsHost::new(SlotTable::new()));
+        Self::with_backend(applier, runtime, SlotBackendKind::default())
+    }
+
+    pub fn with_backend(applier: A, runtime: Runtime, backend_kind: SlotBackendKind) -> Self {
+        let storage = make_backend(backend_kind);
+        let slots = Rc::new(SlotsHost::new(storage));
         let applier = Rc::new(ConcreteApplierHost::new(applier));
         let observer_handle = runtime.handle();
         let observer = SnapshotStateObserver::new(move |callback| {
