@@ -81,13 +81,13 @@ struct ShapeKey {
     z_index: usize,
 }
 
-/// Hash key for text caching
+/// Hash key for text caching - only content matters, not position
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct TextKey {
     text: String,
-    rect_bits: [u32; 4],
     scale_bits: u32,
-    z_index: usize,
+    // NOTE: Removed rect and z_index - text shaping only depends on content + scale
+    // Position is applied during rendering, not shaping
 }
 
 pub struct GpuRenderer {
@@ -287,14 +287,7 @@ impl GpuRenderer {
     fn create_text_key(text: &TextDraw) -> TextKey {
         TextKey {
             text: text.text.clone(),
-            rect_bits: [
-                text.rect.x.to_bits(),
-                text.rect.y.to_bits(),
-                text.rect.width.to_bits(),
-                text.rect.height.to_bits(),
-            ],
             scale_bits: text.scale.to_bits(),
-            z_index: text.z_index,
         }
     }
 
