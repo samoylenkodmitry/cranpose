@@ -8,7 +8,7 @@ use glyphon::{
     Attrs, Buffer, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
@@ -342,13 +342,13 @@ impl GpuRenderer {
         });
 
         // Prepare all shape buffers (with caching)
-        // First, collect keys for current frame shapes
-        let current_keys: Vec<ShapeKey> = sorted_shapes
+        // First, collect keys for current frame shapes using HashSet for O(1) lookups
+        let current_keys: HashSet<ShapeKey> = sorted_shapes
             .iter()
             .map(|shape| Self::create_shape_key(shape))
             .collect();
 
-        // Remove cache entries for shapes no longer present
+        // Remove cache entries for shapes no longer present (O(n) instead of O(n²))
         self.shape_cache.retain(|key, _| current_keys.contains(key));
 
         // First pass: populate cache for missing shapes
@@ -422,14 +422,14 @@ impl GpuRenderer {
         // Prepare text rendering - create buffers and text areas (with caching)
         let mut font_system = self.font_system.lock().unwrap();
 
-        // Collect keys for current frame text
-        let current_text_keys: Vec<TextKey> = sorted_texts
+        // Collect keys for current frame text using HashSet for O(1) lookups
+        let current_text_keys: HashSet<TextKey> = sorted_texts
             .iter()
             .filter(|t| !t.text.is_empty() && t.rect.width > 0.0 && t.rect.height > 0.0)
             .map(|text| Self::create_text_key(text))
             .collect();
 
-        // Remove cache entries for text no longer present
+        // Remove cache entries for text no longer present (O(n) instead of O(n²))
         self.text_cache.retain(|key, _| current_text_keys.contains(key));
 
         // Create or get cached text buffers
