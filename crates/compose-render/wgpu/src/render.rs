@@ -179,7 +179,7 @@ impl ShapeBatchBuffers {
 
         let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Index Buffer"),
-            size: (mem::size_of::<u16>() * 6) as u64,
+            size: (mem::size_of::<u32>() * 6) as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -252,7 +252,7 @@ impl ShapeBatchBuffers {
             let new_capacity = indices.next_power_of_two();
             self.index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Index Buffer"),
-                size: (mem::size_of::<u16>() * new_capacity) as u64,
+                size: (mem::size_of::<u32>() * new_capacity) as u64,
                 usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -491,7 +491,7 @@ impl GpuRenderer {
 
         let shape_count = sorted_shapes.len();
         let mut vertex_data = Vec::with_capacity(shape_count * 4);
-        let mut index_data = Vec::with_capacity(shape_count * 6);
+        let mut index_data: Vec<u32> = Vec::with_capacity(shape_count * 6);
         let mut shape_data_entries = Vec::with_capacity(shape_count);
         let mut gradient_data = Vec::new();
 
@@ -579,7 +579,7 @@ impl GpuRenderer {
                 },
             ]);
 
-            let base_index = (i * 4) as u16;
+            let base_index = (i * 4) as u32;
             index_data.extend_from_slice(&[
                 base_index,
                 base_index + 1,
@@ -684,7 +684,7 @@ impl GpuRenderer {
                 render_pass.set_vertex_buffer(0, self.shape_buffers.vertex_buffer.slice(..));
                 render_pass.set_index_buffer(
                     self.shape_buffers.index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint16,
+                    wgpu::IndexFormat::Uint32,
                 );
 
                 for i in 0..shape_count {
