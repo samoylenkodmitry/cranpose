@@ -355,14 +355,14 @@ impl GpuRenderer {
                     continue;
                 };
 
-                let mut buffer = Buffer::new(
-                    &mut font_system,
-                    Metrics::new(BASE_FONT_SIZE * text_scale, BASE_LINE_HEIGHT * text_scale),
-                );
+                let metrics =
+                    Metrics::new(BASE_FONT_SIZE * text_scale, BASE_LINE_HEIGHT * text_scale);
+                let mut buffer = Buffer::new(&mut font_system, metrics);
+                let buffer_height = text_draw.rect.height.max(metrics.line_height);
                 buffer.set_size(
                     &mut font_system,
-                    text_draw.rect.width,
-                    text_draw.rect.height,
+                    text_draw.rect.width.max(0.0),
+                    buffer_height,
                 );
                 let attrs = match preferred_font {
                     Some(font) => Attrs::new()
