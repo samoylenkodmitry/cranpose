@@ -264,10 +264,79 @@ impl GpuRenderer {
             }
         }
 
-        // Render text
+        // Prepare text rendering - create buffers and text areas
+        let mut font_system = self.font_system.lock().unwrap();
+        let mut text_buffers = Vec::new();
+        let mut text_areas = Vec::new();
+
         for text_draw in &sorted_texts {
-            self.render_text(text_draw, width, height)?;
+            let mut buffer = Buffer::new(
+                &mut font_system,
+                Metrics::new(14.0 * text_draw.scale, 20.0 * text_draw.scale),
+            );
+            buffer.set_size(&mut font_system, text_draw.rect.width, text_draw.rect.height);
+            buffer.set_text(
+                &mut font_system,
+                &text_draw.text,
+                Attrs::new().family(Family::SansSerif),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut font_system);
+
+            let color = GlyphonColor::rgba(
+                (text_draw.color.r() * 255.0) as u8,
+                (text_draw.color.g() * 255.0) as u8,
+                (text_draw.color.b() * 255.0) as u8,
+                (text_draw.color.a() * 255.0) as u8,
+            );
+
+            text_buffers.push(buffer);
         }
+
+        // Create text areas after all buffers are created (to avoid lifetime issues)
+        for (i, text_draw) in sorted_texts.iter().enumerate() {
+            let color = GlyphonColor::rgba(
+                (text_draw.color.r() * 255.0) as u8,
+                (text_draw.color.g() * 255.0) as u8,
+                (text_draw.color.b() * 255.0) as u8,
+                (text_draw.color.a() * 255.0) as u8,
+            );
+
+            text_areas.push(TextArea {
+                buffer: &text_buffers[i],
+                left: text_draw.rect.x,
+                top: text_draw.rect.y,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: text_draw.clip.map(|c| c.x as i32).unwrap_or(0),
+                    top: text_draw.clip.map(|c| c.y as i32).unwrap_or(0),
+                    right: text_draw
+                        .clip
+                        .map(|c| (c.x + c.width) as i32)
+                        .unwrap_or(width as i32),
+                    bottom: text_draw
+                        .clip
+                        .map(|c| (c.y + c.height) as i32)
+                        .unwrap_or(height as i32),
+                },
+                default_color: color,
+            });
+        }
+
+        // Prepare all text at once
+        self.text_renderer
+            .prepare(
+                &self.device,
+                &self.queue,
+                &mut font_system,
+                &mut self.text_atlas,
+                Resolution { width, height },
+                text_areas.iter().cloned(),
+                &mut self.swash_cache,
+            )
+            .map_err(|e| format!("Text prepare error: {:?}", e))?;
+
+        drop(font_system);
 
         {
             let mut text_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -434,63 +503,5 @@ impl GpuRenderer {
         });
 
         Ok((vertex_buffer, index_buffer, shape_bind_group))
-    }
-
-    fn render_text(&mut self, text_draw: &TextDraw, width: u32, height: u32) -> Result<(), String> {
-        let mut font_system = self.font_system.lock().unwrap();
-
-        let mut buffer = Buffer::new(
-            &mut font_system,
-            Metrics::new(14.0 * text_draw.scale, 20.0 * text_draw.scale),
-        );
-        buffer.set_size(&mut font_system, text_draw.rect.width, text_draw.rect.height);
-        buffer.set_text(
-            &mut font_system,
-            &text_draw.text,
-            Attrs::new().family(Family::SansSerif),
-            Shaping::Advanced,
-        );
-        buffer.shape_until_scroll(&mut font_system);
-
-        let color = GlyphonColor::rgba(
-            (text_draw.color.r() * 255.0) as u8,
-            (text_draw.color.g() * 255.0) as u8,
-            (text_draw.color.b() * 255.0) as u8,
-            (text_draw.color.a() * 255.0) as u8,
-        );
-
-        let text_area = TextArea {
-            buffer: &buffer,
-            left: text_draw.rect.x,
-            top: text_draw.rect.y,
-            scale: 1.0,
-            bounds: TextBounds {
-                left: text_draw.clip.map(|c| c.x as i32).unwrap_or(0),
-                top: text_draw.clip.map(|c| c.y as i32).unwrap_or(0),
-                right: text_draw
-                    .clip
-                    .map(|c| (c.x + c.width) as i32)
-                    .unwrap_or(width as i32),
-                bottom: text_draw
-                    .clip
-                    .map(|c| (c.y + c.height) as i32)
-                    .unwrap_or(height as i32),
-            },
-            default_color: color,
-        };
-
-        self.text_renderer
-            .prepare(
-                &self.device,
-                &self.queue,
-                &mut font_system,
-                &mut self.text_atlas,
-                Resolution { width, height },
-                [text_area],
-                &mut self.swash_cache,
-            )
-            .map_err(|e| format!("Text prepare error: {:?}", e))?;
-
-        Ok(())
     }
 }
