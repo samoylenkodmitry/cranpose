@@ -76,9 +76,7 @@ impl GpuRenderer {
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shape Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                format!("{}\n{}", shaders::VERTEX_SHADER, shaders::FRAGMENT_SHADER).into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(shaders::SHADER.into()),
         });
 
         let uniform_bind_group_layout =

@@ -1,6 +1,7 @@
 //! WGSL shaders for 2D rendering with GPU acceleration.
 
-pub const VERTEX_SHADER: &str = r#"
+pub const SHADER: &str = r#"
+// Shared structs
 struct VertexInput {
     @location(0) position: vec2<f32>,
     @location(1) color: vec4<f32>,
@@ -22,6 +23,7 @@ struct Uniforms {
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
+// Vertex shader
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
@@ -37,16 +39,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
     return output;
 }
-"#;
 
-pub const FRAGMENT_SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) rect_pos: vec2<f32>,
-}
-
+// Fragment shader structs and data
 struct ShapeData {
     rect: vec4<f32>,  // x, y, width, height
     radii: vec4<f32>, // top_left, top_right, bottom_left, bottom_right
