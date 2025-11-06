@@ -60,6 +60,39 @@ struct GradientStop {
 /// Cached text buffer for text shaping
 struct CachedTextBuffer {
     buffer: Buffer,
+    // Track what's cached to avoid redundant reshaping
+    text: String,
+    scale: f32,
+}
+
+impl CachedTextBuffer {
+    /// Ensure the buffer has the correct text and metrics, only reshaping if needed
+    /// Returns true if reshaping occurred
+    fn ensure(
+        &mut self,
+        font_system: &mut FontSystem,
+        text: &str,
+        scale: f32,
+        attrs: Attrs,
+    ) -> bool {
+        // Check if anything changed that requires reshaping
+        if self.text == text && self.scale == scale {
+            return false; // No reshaping needed!
+        }
+
+        // Something changed, need to reshape
+        let metrics = Metrics::new(14.0 * scale, 20.0 * scale);
+        self.buffer.set_metrics(font_system, metrics);
+        self.buffer.set_text(font_system, text, attrs, Shaping::Advanced);
+        self.buffer.shape_until_scroll(font_system);
+
+        // Update cached values
+        self.text.clear();
+        self.text.push_str(text);
+        self.scale = scale;
+
+        true
+    }
 }
 
 /// Persistent GPU buffers for batched shape rendering
@@ -571,7 +604,7 @@ impl GpuRenderer {
         // Remove cache entries for text no longer present (O(n) instead of O(n²))
         self.text_cache.retain(|key, _| current_text_keys.contains(key));
 
-        // Create or get cached text buffers
+        // Create or update cached text buffers (only reshape when needed)
         for text_draw in &sorted_texts {
             // Skip empty text or zero-sized rects
             if text_draw.text.is_empty() || text_draw.rect.width <= 0.0 || text_draw.rect.height <= 0.0 {
@@ -580,13 +613,15 @@ impl GpuRenderer {
 
             let key = Self::create_text_key(text_draw);
 
-            if !self.text_cache.contains_key(&key) {
+            if let Some(cached) = self.text_cache.get_mut(&key) {
+                // Already in cache - use ensure() to only reshape if needed
+                cached.ensure(&mut font_system, &text_draw.text, text_draw.scale, Attrs::new());
+            } else {
                 // Not in cache, create new buffer
                 let mut buffer = Buffer::new(
                     &mut font_system,
                     Metrics::new(14.0 * text_draw.scale, 20.0 * text_draw.scale),
                 );
-                // Don't constrain buffer size - let it shape freely
                 buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
                 buffer.set_text(
                     &mut font_system,
@@ -600,6 +635,8 @@ impl GpuRenderer {
                     key,
                     CachedTextBuffer {
                         buffer,
+                        text: text_draw.text.clone(),
+                        scale: text_draw.scale,
                     },
                 );
             }
