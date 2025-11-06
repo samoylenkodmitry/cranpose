@@ -73,6 +73,7 @@ impl GpuRenderer {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
+        font_system: Arc<Mutex<FontSystem>>,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shape Shader"),
@@ -158,7 +159,6 @@ impl GpuRenderer {
             multiview: None,
         });
 
-        let font_system = Arc::new(Mutex::new(FontSystem::new()));
         let swash_cache = SwashCache::new();
         let mut text_atlas = TextAtlas::new(&device, &queue, surface_format);
         let text_renderer = TextRenderer::new(

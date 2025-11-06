@@ -68,7 +68,12 @@ impl WgpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
     ) {
-        self.gpu_renderer = Some(GpuRenderer::new(device, queue, surface_format));
+        self.gpu_renderer = Some(GpuRenderer::new(
+            device,
+            queue,
+            surface_format,
+            self.font_system.clone(),
+        ));
     }
 
     /// Render the scene to a texture view.
