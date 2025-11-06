@@ -239,9 +239,9 @@ impl GpuRenderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 1.0,
-                            g: 1.0,
-                            b: 1.0,
+                            r: 18.0 / 255.0,
+                            g: 18.0 / 255.0,
+                            b: 24.0 / 255.0,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
