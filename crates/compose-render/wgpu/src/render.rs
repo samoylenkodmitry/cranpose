@@ -100,6 +100,7 @@ impl CachedTextBuffer {
         let mut buffer = Buffer::new(font_system, metrics);
         buffer.set_size(font_system, width, height);
         buffer.set_text(font_system, text, attrs, Shaping::Advanced);
+        buffer.shape_until_scroll(font_system);
         Self {
             buffer,
             metrics,
@@ -139,6 +140,10 @@ impl CachedTextBuffer {
             self.text.clear();
             self.text.push_str(text);
             reshaped = true;
+        }
+
+        if reshaped {
+            self.buffer.shape_until_scroll(font_system);
         }
 
         reshaped
