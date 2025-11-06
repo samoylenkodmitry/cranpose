@@ -13,7 +13,7 @@ pub use scene::{ClickAction, DrawShape, HitRegion, Scene, TextDraw};
 use compose_render_common::{Renderer, RenderScene};
 use compose_ui::{set_text_measurer, LayoutTree, TextMeasurer};
 use compose_ui_graphics::Size;
-use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
+use glyphon::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use lru::LruCache;
 use render::GpuRenderer;
 use std::num::NonZeroUsize;
