@@ -295,10 +295,11 @@ impl GpuRenderer {
                 Metrics::new(14.0 * text_draw.scale, 20.0 * text_draw.scale),
             );
             buffer.set_size(&mut font_system, text_draw.rect.width, text_draw.rect.height);
+            // Try using default family (first available) instead of specifying
             buffer.set_text(
                 &mut font_system,
                 &text_draw.text,
-                Attrs::new().family(Family::Name("Roboto")),
+                Attrs::new(),
                 Shaping::Advanced,
             );
             buffer.shape_until_scroll(&mut font_system);

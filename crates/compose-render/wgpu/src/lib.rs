@@ -162,10 +162,11 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut font_system = self.font_system.lock().unwrap();
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
         buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
+        // Use default family instead of specifying
         buffer.set_text(
             &mut font_system,
             text,
-            Attrs::new().family(Family::Name("Roboto")),
+            Attrs::new(),
             Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut font_system);
