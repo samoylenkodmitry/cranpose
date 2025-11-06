@@ -323,7 +323,7 @@ impl SlotTable {
 
     /// Returns whether the most recent `start` invocation reused a gap slot.
     /// Resets the flag to false after reading.
-    fn take_last_start_was_gap(&mut self) -> bool {
+    pub(crate) fn take_last_start_was_gap(&mut self) -> bool {
         let was_gap = self.last_start_was_gap;
         self.last_start_was_gap = false;
         was_gap
@@ -365,7 +365,12 @@ impl SlotTable {
     /// Mark a range of slots as gaps instead of truncating.
     /// This preserves sibling components while allowing structure changes.
     /// When encountering a Group, recursively marks the entire group structure as gaps.
-    pub fn mark_range_as_gaps(&mut self, start: usize, end: usize, owner_index: Option<usize>) -> bool {
+    pub fn mark_range_as_gaps(
+        &mut self,
+        start: usize,
+        end: usize,
+        owner_index: Option<usize>,
+    ) -> bool {
         let mut i = start;
         let end = end.min(self.slots.len());
         let mut marked_any = false;
@@ -1166,7 +1171,7 @@ impl SlotTable {
             }
         }
     }
-    fn flush_anchors_if_dirty(&mut self) {
+    pub(crate) fn flush_anchors_if_dirty(&mut self) {
         if self.anchors_dirty {
             self.anchors_dirty = false;
             self.rebuild_all_anchor_positions();
@@ -1242,7 +1247,7 @@ impl SlotTable {
         }
     }
 
-    fn end_recompose(&mut self) {
+    pub(crate) fn end_recompose(&mut self) {
         if let Some(frame) = self.group_stack.pop() {
             self.cursor = frame.end;
         }
