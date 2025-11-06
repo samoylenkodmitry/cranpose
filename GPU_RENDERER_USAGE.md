@@ -8,26 +8,30 @@ The rs-compose framework now supports **GPU-accelerated rendering** using WGPU, 
 
 ### Desktop Application
 
-To build and run the desktop app with GPU acceleration:
+The desktop demo now uses the GPU-accelerated WGPU renderer by default:
 
 ```bash
-# Build with WGPU renderer (recommended)
-cargo build --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
-
-# Run with WGPU renderer
-cargo run --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
-```
-
-### Default (CPU) Renderer
-
-The default configuration still uses the CPU-based pixels renderer for compatibility:
-
-```bash
-# Build with pixels renderer (default)
+# Build with default GPU renderer
 cargo build --package desktop-app
 
-# Run with pixels renderer
+# Run with default GPU renderer
 cargo run --package desktop-app
+
+# Release build (recommended for profiling)
+cargo run --release --package desktop-app
+```
+
+### CPU Fallback Renderer
+
+If you need the legacy CPU-based pixels renderer (for example, when a GPU is unavailable),
+explicitly opt into it at compile time:
+
+```bash
+# Build with the pixels renderer
+cargo build --package desktop-app --no-default-features --features "renderer-pixels,desktop"
+
+# Run with the pixels renderer
+cargo run --package desktop-app --no-default-features --features "renderer-pixels,desktop"
 ```
 
 ## Performance Comparison
@@ -65,11 +69,11 @@ Task Manager → Performance → GPU
 Compare CPU usage between renderers:
 
 ```bash
-# Run with CPU renderer and profile
+# Run with GPU renderer and profile (default)
 cargo flamegraph --package desktop-app
 
-# Run with GPU renderer and profile
-cargo flamegraph --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu" --package desktop-app
+# Run with CPU renderer and profile
+cargo flamegraph --package desktop-app --no-default-features --features "renderer-pixels,desktop"
 ```
 
 The GPU renderer should show:
@@ -82,8 +86,8 @@ The GPU renderer should show:
 The WGPU renderer logs GPU backend information at startup:
 
 ```bash
-# Look for WGPU backend logs when running
-RUST_LOG=debug cargo run --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
+# Look for WGPU backend logs when running (default build)
+RUST_LOG=debug cargo run --package desktop-app
 ```
 
 Expected output:
@@ -117,7 +121,7 @@ To support WGPU 0.19 with `raw-window-handle` 0.6 compatibility, winit was upgra
 ### Feature Flags
 ```toml
 # Cargo.toml features
-default = ["desktop", "renderer-pixels"]
+default = ["desktop", "renderer-wgpu"]
 renderer-pixels = ["compose-render-pixels", "dep:pixels"]
 renderer-wgpu = ["compose-render-wgpu", "dep:wgpu", "dep:pollster"]
 ```
@@ -170,7 +174,7 @@ If you encounter build errors with feature flags:
 # Clean build directory
 cargo clean
 
-# Rebuild with specific features
+# Rebuild with explicit GPU features (optional; default already enables them)
 cargo build --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
 ```
 
@@ -186,7 +190,7 @@ If GPU renderer is slower than expected:
 - Verify GPU is not throttled (battery saving mode)
 - Check for debug build vs release build:
   ```bash
-  cargo run --release --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
+  cargo run --release --package desktop-app
   ```
 
 ## Next Steps

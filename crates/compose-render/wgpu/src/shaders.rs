@@ -40,7 +40,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 "#;
 
 pub const FRAGMENT_SHADER: &str = r#"
-struct VertexOutput {
+struct FragmentInput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
@@ -83,7 +83,7 @@ fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 }
 
 @fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(input: FragmentInput) -> @location(0) vec4<f32> {
     let rect_pos = input.rect_pos;
     let rect_center = shape_data.rect.xy + shape_data.rect.zw * 0.5;
     let half_size = shape_data.rect.zw * 0.5;
