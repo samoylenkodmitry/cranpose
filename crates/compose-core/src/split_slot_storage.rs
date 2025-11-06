@@ -58,6 +58,10 @@ pub struct SplitSlotStorage {
     next_anchor_id: Cell<usize>,
     /// Tracks whether last begin_group restored from gap.
     last_start_was_gap: bool,
+    /// Debug: instance ID for tracking
+    instance_id: usize,
+    /// Tracks if we're currently in recompose mode (after begin_recompose_at_scope)
+    in_recompose_mode: bool,
 }
 
 struct GroupFrame {
@@ -116,8 +120,14 @@ impl Default for LayoutSlot {
 
 impl SplitSlotStorage {
     pub fn new() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static INSTANCE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let instance_id = INSTANCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+        eprintln!("[SplitSlotStorage::new] Creating instance #{}", instance_id);
         Self {
             next_anchor_id: Cell::new(1), // Start at 1 (0 is INVALID)
+            instance_id,
+            in_recompose_mode: false,
             ..Default::default()
         }
     }
@@ -141,13 +151,46 @@ impl SplitSlotStorage {
     fn insert_at_cursor(&mut self, slot: LayoutSlot) {
         self.ensure_capacity();
 
+        eprintln!("[insert_at_cursor] cursor={}, inserting: {:?}", self.cursor, match &slot {
+            LayoutSlot::Group { key, .. } => format!("Group(key={})", key),
+            LayoutSlot::Gap { .. } => "Gap".to_string(),
+            LayoutSlot::ValueRef { anchor } => format!("ValueRef(anchor={})", anchor.0),
+            LayoutSlot::Node { .. } => "Node".to_string(),
+        });
+
         // Check if we can reuse a gap
         if matches!(self.layout.get(self.cursor), Some(LayoutSlot::Gap { .. })) {
+            eprintln!("[insert_at_cursor] Replacing gap at cursor={}", self.cursor);
             self.layout[self.cursor] = slot;
         } else {
             // Need to insert - for simplicity, just overwrite
             // A full implementation would shift
             if self.cursor < self.layout.len() {
+                // If we're overwriting a Group, mark its children as gaps first
+                if let Some(LayoutSlot::Group { len, .. }) = self.layout.get(self.cursor) {
+                    let group_len = *len;
+                    if group_len > 0 {
+                        // Mark children as gaps
+                        let children_start = self.cursor + 1;
+                        let children_end = (children_start + group_len).min(self.layout.len());
+                        for i in children_start..children_end {
+                            if let Some(child_slot) = self.layout.get_mut(i) {
+                                // Preserve anchor for all slot types so values can be restored
+                                let child_anchor = child_slot.anchor_id();
+                                let (child_key, child_scope, child_len) = match child_slot {
+                                    LayoutSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                                    _ => (None, None, 0),
+                                };
+                                *child_slot = LayoutSlot::Gap {
+                                    anchor: child_anchor,
+                                    group_key: child_key,
+                                    group_scope: child_scope,
+                                    group_len: child_len,
+                                };
+                            }
+                        }
+                    }
+                }
                 self.layout[self.cursor] = slot;
             }
         }
@@ -163,6 +206,16 @@ impl SplitSlotStorage {
 
     fn start_group(&mut self, key: Key) -> (usize, bool) {
         self.ensure_capacity();
+
+        eprintln!("[start_group] instance_id={}, cursor={}, key={}", self.instance_id, self.cursor, key);
+        if let Some(slot) = self.layout.get(self.cursor) {
+            eprintln!("[start_group] found: {:?}", match slot {
+                LayoutSlot::Group { key, .. } => format!("Group(key={})", key),
+                LayoutSlot::Gap { group_key, .. } => format!("Gap(group_key={:?})", group_key),
+                LayoutSlot::ValueRef { anchor } => format!("ValueRef(anchor={})", anchor.0),
+                LayoutSlot::Node { .. } => "Node".to_string(),
+            });
+        }
 
         // Check if parent is forcing children to recompose
         let parent_force = self.group_stack.last().map_or(false, |frame| frame.force_children_recompose);
@@ -291,6 +344,7 @@ impl SplitSlotStorage {
         let frame_end = match self.group_stack.last() {
             Some(frame) => frame.end,
             None => {
+                eprintln!("[finalize] ROOT level: cursor={}, layout.len()={}", self.cursor, self.layout.len());
                 // Root-level finalization: mark everything from cursor to end as gaps
                 if self.cursor >= self.layout.len() {
                     return false;
@@ -300,7 +354,14 @@ impl SplitSlotStorage {
                     let slot = &mut self.layout[self.cursor];
                     let anchor = slot.anchor_id();
                     let (group_key, group_scope, group_len) = match slot {
-                        LayoutSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                        LayoutSlot::Group { key, scope, len, .. } => {
+                            eprintln!("[finalize] ROOT marking Group at {} (key={}) as Gap", self.cursor, key);
+                            (Some(*key), *scope, *len)
+                        },
+                        LayoutSlot::ValueRef { .. } => {
+                            eprintln!("[finalize] ROOT marking ValueRef at {} (anchor={}) as Gap", self.cursor, anchor.0);
+                            (None, None, 0)
+                        },
                         _ => (None, None, 0),
                     };
                     *slot = LayoutSlot::Gap {
@@ -318,12 +379,20 @@ impl SplitSlotStorage {
             }
         };
 
+        eprintln!("[finalize] IN-GROUP: cursor={}, frame_end={}", self.cursor, frame_end);
         let mut marked = false;
         while self.cursor < frame_end && self.cursor < self.layout.len() {
             let slot = &mut self.layout[self.cursor];
             let anchor = slot.anchor_id();
             let (group_key, group_scope, group_len) = match slot {
-                LayoutSlot::Group { key, scope, len, .. } => (Some(*key), *scope, *len),
+                LayoutSlot::Group { key, scope, len, .. } => {
+                    eprintln!("[finalize] IN-GROUP marking Group at {} (key={}) as Gap", self.cursor, key);
+                    (Some(*key), *scope, *len)
+                },
+                LayoutSlot::ValueRef { .. } => {
+                    eprintln!("[finalize] IN-GROUP marking ValueRef at {} (anchor={}) as Gap", self.cursor, anchor.0);
+                    (None, None, 0)
+                },
                 _ => (None, None, 0),
             };
 
@@ -391,22 +460,45 @@ impl SlotStorage for SplitSlotStorage {
     }
 
     fn begin_recompose_at_scope(&mut self, scope: ScopeId) -> Option<Self::Group> {
+        eprintln!("[begin_recompose_at_scope] instance_id={}, searching for scope={}", self.instance_id, scope);
         for (idx, slot) in self.layout.iter().enumerate() {
             if let LayoutSlot::Group {
-                scope: Some(s), ..
+                scope: Some(s),
+                key,
+                len,
+                has_gap_children,
+                ..
             } = slot
             {
                 if *s == scope {
-                    self.cursor = idx;
+                    eprintln!("[begin_recompose_at_scope] Found scope {} at idx={}, entering group", scope, idx);
+                    // Enter the group: move cursor past the group slot
+                    self.cursor = idx + 1;
+
+                    // Check if first child is a RecomposeScope and skip it
+                    // Macro-generated composables have RecomposeScope as first child
+                    let mut did_skip_recompose_scope = false;
+                    if let Some(LayoutSlot::ValueRef { anchor }) = self.layout.get(self.cursor) {
+                        if let Some(data) = self.payload.get(&anchor.0) {
+                            if (**data).type_id() == std::any::TypeId::of::<crate::owned::Owned<crate::RecomposeScope>>() {
+                                self.cursor += 1;
+                                did_skip_recompose_scope = true;
+                            }
+                        }
+                    }
+
+                    eprintln!("[begin_recompose_at_scope] Cursor now at {}, skipped RecomposeScope: {}", self.cursor, did_skip_recompose_scope);
+                    self.in_recompose_mode = true;
                     return Some(GroupId::new(idx));
                 }
             }
         }
+        eprintln!("[begin_recompose_at_scope] Scope {} NOT FOUND", scope);
         None
     }
 
     fn end_recompose(&mut self) {
-        // No-op
+        self.in_recompose_mode = false;
     }
 
     fn alloc_value_slot<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Self::ValueSlot {
@@ -415,12 +507,25 @@ impl SlotStorage for SplitSlotStorage {
         // NOTE: force_children_recompose is ONLY for child GROUPS, not for value slots!
         // Value slots should always be reused if the type matches, just like in Baseline.
 
+        eprintln!("[alloc_value_slot] cursor={}, type={}", self.cursor, std::any::type_name::<T>());
+        if let Some(slot) = self.layout.get(self.cursor) {
+            eprintln!("[alloc_value_slot] found slot: {:?}", match slot {
+                LayoutSlot::ValueRef { anchor } => format!("ValueRef(anchor={})", anchor.0),
+                LayoutSlot::Gap { anchor, group_key, .. } => format!("Gap(anchor={}, is_group={})", anchor.0, group_key.is_some()),
+                LayoutSlot::Group { .. } => "Group".to_string(),
+                LayoutSlot::Node { .. } => "Node".to_string(),
+            });
+        }
+
         // Check if current slot is a value ref we can reuse
         if let Some(LayoutSlot::ValueRef { anchor }) = self.layout.get(self.cursor) {
             let anchor_id = anchor.0;
+            eprintln!("[alloc_value_slot] Found ValueRef with anchor={}", anchor_id);
             // Check if payload exists and has correct type
             if let Some(data) = self.payload.get(&anchor_id) {
+                eprintln!("[alloc_value_slot] Payload exists, type matches: {}", data.is::<T>());
                 if data.is::<T>() {
+                    eprintln!("[alloc_value_slot] ✓ Reusing existing ValueRef");
                     // Reuse existing slot with matching type
                     let slot_id = ValueSlotId::new(self.cursor);
                     self.cursor += 1;
@@ -446,13 +551,17 @@ impl SlotStorage for SplitSlotStorage {
             let gap_anchor = *anchor;
             let is_group_gap = group_key.is_some();
 
+            eprintln!("[alloc_value_slot] Gap: anchor={}, is_valid={}, is_group={}", gap_anchor.0, gap_anchor.is_valid(), is_group_gap);
+
             // If this gap was NOT a group (i.e., it was a value or node slot),
             // try to restore it as a ValueRef and reuse the payload
             if !is_group_gap && gap_anchor.is_valid() {
                 let anchor_id = gap_anchor.0;
                 // Check if payload exists and has correct type
                 if let Some(data) = self.payload.get(&anchor_id) {
+                    eprintln!("[alloc_value_slot] Gap has payload, type matches: {}", data.is::<T>());
                     if data.is::<T>() {
+                        eprintln!("[alloc_value_slot] ✓ Restoring Gap as ValueRef with existing payload");
                         // Restore the ValueRef and reuse existing payload
                         self.layout[self.cursor] = LayoutSlot::ValueRef { anchor: gap_anchor };
                         let slot_id = ValueSlotId::new(self.cursor);
@@ -475,6 +584,8 @@ impl SlotStorage for SplitSlotStorage {
             let anchor = self.alloc_anchor();
             let anchor_id = anchor.0;
 
+            eprintln!("[alloc_value_slot] Creating new ValueRef in gap at cursor={} with anchor={}, type={}", self.cursor, anchor_id, std::any::type_name::<T>());
+
             // Store payload
             self.payload.insert(anchor_id, Box::new(init()));
 
@@ -496,6 +607,8 @@ impl SlotStorage for SplitSlotStorage {
         // Create new value slot
         let anchor = self.alloc_anchor();
         let anchor_id = anchor.0;
+
+        eprintln!("[alloc_value_slot] Creating new ValueRef at cursor={} with anchor={}, type={}", self.cursor, anchor_id, std::any::type_name::<T>());
 
         // Store payload
         self.payload.insert(anchor_id, Box::new(init()));
@@ -563,11 +676,35 @@ impl SlotStorage for SplitSlotStorage {
     }
 
     fn reset(&mut self) {
+        eprintln!("[reset] instance_id={}, layout.len()={}, first few slots:", self.instance_id, self.layout.len());
+        for (i, slot) in self.layout.iter().take(10).enumerate() {
+            let desc = match slot {
+                LayoutSlot::Group { key, len, .. } => format!("Group(key={}, len={})", key, len),
+                LayoutSlot::Gap { anchor, group_key, .. } => format!("Gap(anchor={}, is_group={})", anchor.0, group_key.is_some()),
+                LayoutSlot::ValueRef { anchor } => format!("ValueRef(anchor={})", anchor.0),
+                LayoutSlot::Node { .. } => "Node".to_string(),
+            };
+            eprintln!("  [{}] {}", i, desc);
+        }
         self.cursor = 0;
         self.group_stack.clear();
+        eprintln!("[reset] cursor reset to 0");
     }
 
     fn flush(&mut self) {
+        eprintln!("[flush] instance_id={}, layout.len()={}, cursor={}", self.instance_id, self.layout.len(), self.cursor);
+        eprintln!("[flush] Slots 15-25:");
+        for i in 15..25.min(self.layout.len()) {
+            if let Some(slot) = self.layout.get(i) {
+                let desc = match slot {
+                    LayoutSlot::Group { key, len, scope, .. } => format!("Group(key={}, len={}, scope={:?})", key, len, scope),
+                    LayoutSlot::Gap { anchor, group_key, .. } => format!("Gap(anchor={}, is_group={})", anchor.0, group_key.is_some()),
+                    LayoutSlot::ValueRef { anchor } => format!("ValueRef(anchor={})", anchor.0),
+                    LayoutSlot::Node { .. } => "Node".to_string(),
+                };
+                eprintln!("  [{}] {}", i, desc);
+            }
+        }
         // Rebuild anchors if needed
         if self.anchors_dirty {
             for pos in self.anchors.iter_mut() {

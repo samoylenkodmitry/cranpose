@@ -2605,5 +2605,9 @@ mod recursive_decrease_increase_test;
 #[path = "tests/slot_backend_tests.rs"]
 mod slot_backend_tests;
 
+#[cfg(test)]
+#[path = "tests/split_recompose_tests.rs"]
+mod split_recompose_tests;
+
 pub mod collections;
 pub mod hash;
