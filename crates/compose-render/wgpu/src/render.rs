@@ -13,7 +13,6 @@ use lru::LruCache;
 use std::collections::BTreeMap;
 use std::mem;
 use std::num::NonZeroUsize;
-use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 const TEXT_CACHE_INITIAL_CAPACITY: usize = 128;
@@ -155,13 +154,13 @@ impl CachedTextBuffer {
 
 struct PreparedTextArea {
     key: TextCacheKey,
-    buffer: NonNull<Buffer>,
     left: f32,
     top: f32,
     bounds: TextBounds,
     color: GlyphonColor,
     scale: f32,
     buffer_height: f32,
+    fallback: Option<Box<Buffer>>,
 }
 
 struct ShapeBatchBuffers {
@@ -774,7 +773,7 @@ impl GpuRenderer {
                 let key = TextCacheKey::new(&text_draw.text, text_scale);
                 let mut reshaped = false;
 
-                let buffer_ptr = if let Some(entry) = self.text_cache.get_mut(&key) {
+                if let Some(entry) = self.text_cache.get_mut(&key) {
                     let attrs = match self.preferred_font.as_ref() {
                         Some(font) => Attrs::new()
                             .family(Family::Name(&font.family))
@@ -789,9 +788,7 @@ impl GpuRenderer {
                         &text_draw.text,
                         attrs,
                     );
-                    let ptr = NonNull::from(&entry.buffer);
                     log_text_glyphs(&font_system, &entry.buffer, text_draw, text_scale);
-                    ptr
                 } else {
                     if self.text_cache.len() == self.text_cache.cap().get() {
                         drop(font_system);
@@ -818,10 +815,8 @@ impl GpuRenderer {
                         .text_cache
                         .get_mut(&key)
                         .expect("text cache entry missing after insertion");
-                    let ptr = NonNull::from(&entry.buffer);
                     log_text_glyphs(&font_system, &entry.buffer, text_draw, text_scale);
-                    ptr
-                };
+                }
 
                 let to_u8 = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
 
@@ -834,13 +829,13 @@ impl GpuRenderer {
 
                 prepared_areas.push(PreparedTextArea {
                     key: key.clone(),
-                    buffer: buffer_ptr,
                     left: text_draw.rect.x,
                     top: text_draw.rect.y,
                     bounds,
                     color,
                     scale: text_scale,
                     buffer_height,
+                    fallback: None,
                 });
 
                 if reshaped && log::log_enabled!(log::Level::Debug) {
@@ -878,10 +873,9 @@ impl GpuRenderer {
 
             if prepared_texts > 0 {
                 let mut text_areas = Vec::with_capacity(prepared_texts);
-                let mut fallback_buffers: Vec<Box<Buffer>> = Vec::new();
-                for area in &prepared_areas {
-                    if self.text_cache.contains(&area.key) {
-                        let buffer_ref: &Buffer = unsafe { area.buffer.as_ref() };
+                for area in &mut prepared_areas {
+                    if let Some(entry) = self.text_cache.peek(&area.key) {
+                        let buffer_ref: &Buffer = &entry.buffer;
                         text_areas.push(TextArea {
                             buffer: buffer_ref,
                             left: area.left,
@@ -902,7 +896,7 @@ impl GpuRenderer {
                             DEFAULT_FONT_SIZE * area.scale,
                             DEFAULT_LINE_HEIGHT * area.scale,
                         );
-                        let mut buffer = Box::new(Buffer::new(&mut font_system, metrics));
+                        let mut buffer = Buffer::new(&mut font_system, metrics);
                         buffer.set_size(&mut font_system, f32::MAX, area.buffer_height);
                         let attrs = match self.preferred_font.as_ref() {
                             Some(font) => Attrs::new()
@@ -912,14 +906,12 @@ impl GpuRenderer {
                         };
                         buffer.set_text(&mut font_system, &area.key.text, attrs, Shaping::Advanced);
                         buffer.shape_until_scroll(&mut font_system);
-                        fallback_buffers.push(buffer);
-                        let buffer_ptr = {
-                            let last = fallback_buffers
-                                .last()
-                                .expect("fallback buffer missing after push");
-                            last.as_ref() as *const Buffer
-                        };
-                        let buffer_ref: &Buffer = unsafe { &*buffer_ptr };
+                        area.fallback = Some(Box::new(buffer));
+                        let buffer_ref: &Buffer = area
+                            .fallback
+                            .as_ref()
+                            .map(|owned| owned.as_ref())
+                            .expect("fallback buffer missing after creation");
                         text_areas.push(TextArea {
                             buffer: buffer_ref,
                             left: area.left,
