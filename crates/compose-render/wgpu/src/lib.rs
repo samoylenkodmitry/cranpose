@@ -47,7 +47,7 @@ pub struct WgpuRenderer {
     gpu_renderer: Option<GpuRenderer>,
     font_system: Arc<Mutex<FontSystem>>,
     preferred_font: Option<PreferredFont>,
-    text_cache: Arc<Mutex<LruCache<TextCacheKey, Box<CachedTextBuffer>>>>,
+    render_cache: Arc<Mutex<LruCache<TextCacheKey, Box<CachedTextBuffer>>>>,
 }
 
 impl WgpuRenderer {
@@ -67,12 +67,15 @@ impl WgpuRenderer {
         }
 
         let font_system = Arc::new(Mutex::new(base_font_system));
-        let text_cache = Arc::new(Mutex::new(LruCache::new(
+        let measure_cache = Arc::new(Mutex::new(LruCache::new(
+            NonZeroUsize::new(TEXT_CACHE_INITIAL_CAPACITY).unwrap(),
+        )));
+        let render_cache = Arc::new(Mutex::new(LruCache::new(
             NonZeroUsize::new(TEXT_CACHE_INITIAL_CAPACITY).unwrap(),
         )));
         let text_measurer = WgpuTextMeasurer::new(
             font_system.clone(),
-            text_cache.clone(),
+            measure_cache.clone(),
             preferred_font.clone(),
         );
         set_text_measurer(text_measurer.clone());
@@ -82,7 +85,7 @@ impl WgpuRenderer {
             gpu_renderer: None,
             font_system,
             preferred_font,
-            text_cache,
+            render_cache,
         }
     }
 
@@ -99,7 +102,7 @@ impl WgpuRenderer {
             surface_format,
             self.font_system.clone(),
             self.preferred_font.clone(),
-            self.text_cache.clone(),
+            self.render_cache.clone(),
         ));
     }
 
