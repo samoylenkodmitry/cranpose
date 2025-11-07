@@ -184,11 +184,14 @@ impl TextMeasurer for WgpuTextMeasurer {
         {
             let mut cache = self.cache.lock().unwrap();
             if let Some(size) = cache.get(&key) {
+                // Size cache HIT - fastest path!
                 return compose_ui::TextMetrics {
                     width: size.width,
                     height: size.height,
                 };
             }
+            // Size cache MISS - need to measure
+            eprintln!("[TEXT MEASURE] Size cache MISS for: \"{}\"", text);
         }
 
         // Need to measure - check buffer cache
@@ -197,10 +200,14 @@ impl TextMeasurer for WgpuTextMeasurer {
 
         let buffer = if let Some(cached) = buffer_cache.get_mut(&key) {
             // Buffer cache hit - use ensure() to only reshape if needed
-            cached.ensure(&mut font_system, text, font_size, Attrs::new());
+            let reshaped = cached.ensure(&mut font_system, text, font_size, Attrs::new());
+            if reshaped {
+                eprintln!("[TEXT MEASURE] Buffer reshaped (text/size changed): \"{}\"", text);
+            }
             &cached.buffer
         } else {
             // Buffer cache miss - create new buffer
+            eprintln!("[TEXT MEASURE] Buffer cache MISS, creating new buffer: \"{}\"", text);
             let mut new_buffer = Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
             new_buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
             new_buffer.set_text(
