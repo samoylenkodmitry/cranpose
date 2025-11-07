@@ -8,6 +8,7 @@ mod pipeline;
 mod render;
 mod scene;
 mod shaders;
+mod text_cache;
 
 pub use scene::{ClickAction, DrawShape, HitRegion, Scene, TextDraw};
 
@@ -18,11 +19,15 @@ use font::{
     create_font_system, detect_preferred_font, PreferredFont, DEFAULT_FONT_SIZE,
     DEFAULT_LINE_HEIGHT,
 };
-use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
+use glyphon::{Attrs, Family, FontSystem, Metrics};
 use lru::LruCache;
 use render::GpuRenderer;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
+use text_cache::{
+    grow_text_cache, text_metrics_from_buffer, CachedTextBuffer, TextCacheKey,
+    TEXT_CACHE_INITIAL_CAPACITY,
+};
 
 #[derive(Debug)]
 pub enum WgpuRendererError {
@@ -42,6 +47,7 @@ pub struct WgpuRenderer {
     gpu_renderer: Option<GpuRenderer>,
     font_system: Arc<Mutex<FontSystem>>,
     preferred_font: Option<PreferredFont>,
+    text_cache: Arc<Mutex<LruCache<TextCacheKey, Box<CachedTextBuffer>>>>,
 }
 
 impl WgpuRenderer {
@@ -61,7 +67,14 @@ impl WgpuRenderer {
         }
 
         let font_system = Arc::new(Mutex::new(base_font_system));
-        let text_measurer = WgpuTextMeasurer::new(font_system.clone(), preferred_font.clone());
+        let text_cache = Arc::new(Mutex::new(LruCache::new(
+            NonZeroUsize::new(TEXT_CACHE_INITIAL_CAPACITY).unwrap(),
+        )));
+        let text_measurer = WgpuTextMeasurer::new(
+            font_system.clone(),
+            text_cache.clone(),
+            preferred_font.clone(),
+        );
         set_text_measurer(text_measurer.clone());
 
         Self {
@@ -69,6 +82,7 @@ impl WgpuRenderer {
             gpu_renderer: None,
             font_system,
             preferred_font,
+            text_cache,
         }
     }
 
@@ -85,6 +99,7 @@ impl WgpuRenderer {
             surface_format,
             self.font_system.clone(),
             self.preferred_font.clone(),
+            self.text_cache.clone(),
         ));
     }
 
@@ -148,15 +163,19 @@ impl Renderer for WgpuRenderer {
 #[derive(Clone)]
 struct WgpuTextMeasurer {
     font_system: Arc<Mutex<FontSystem>>,
-    cache: Arc<Mutex<LruCache<(String, i32), Size>>>,
+    text_cache: Arc<Mutex<LruCache<TextCacheKey, Box<CachedTextBuffer>>>>,
     preferred_font: Option<PreferredFont>,
 }
 
 impl WgpuTextMeasurer {
-    fn new(font_system: Arc<Mutex<FontSystem>>, preferred_font: Option<PreferredFont>) -> Self {
+    fn new(
+        font_system: Arc<Mutex<FontSystem>>,
+        text_cache: Arc<Mutex<LruCache<TextCacheKey, Box<CachedTextBuffer>>>>,
+        preferred_font: Option<PreferredFont>,
+    ) -> Self {
         Self {
             font_system,
-            cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap()))),
+            text_cache,
             preferred_font,
         }
     }
@@ -165,62 +184,43 @@ impl WgpuTextMeasurer {
 impl TextMeasurer for WgpuTextMeasurer {
     fn measure(&self, text: &str) -> compose_ui::TextMetrics {
         let font_size = DEFAULT_FONT_SIZE;
-        let key = (text.to_string(), (font_size * 100.0) as i32);
+        let text_scale = 1.0f32;
+        let key = TextCacheKey::new(text, text_scale);
 
         {
-            let mut cache = self.cache.lock().unwrap();
-            if let Some(size) = cache.get(&key) {
-                return compose_ui::TextMetrics {
-                    width: size.width,
-                    height: size.height,
-                };
+            let cache = self.text_cache.lock().unwrap();
+            if let Some(entry) = cache.peek(&key) {
+                return text_metrics_from_buffer(entry.as_ref());
             }
         }
 
         let mut font_system = self.font_system.lock().unwrap();
-        let mut buffer = Buffer::new(
-            &mut font_system,
-            Metrics::new(font_size, DEFAULT_LINE_HEIGHT),
-        );
-        buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
+        let metrics = Metrics::new(font_size, DEFAULT_LINE_HEIGHT);
         let attrs = match &self.preferred_font {
             Some(font) => Attrs::new()
                 .family(Family::Name(&font.family))
                 .weight(font.weight),
             None => Attrs::new().family(Family::SansSerif),
         };
-        buffer.set_text(&mut font_system, text, attrs, Shaping::Advanced);
-        buffer.shape_until_scroll(&mut font_system);
+        let cached = CachedTextBuffer::new(
+            &mut font_system,
+            metrics,
+            key.scale_key(),
+            f32::MAX,
+            text,
+            attrs,
+        );
+        let metrics = text_metrics_from_buffer(&cached);
+        drop(font_system);
 
-        let mut max_width = 0.0f32;
-        let mut total_lines = 0usize;
-        let mut last_line = None;
-
-        for run in buffer.layout_runs() {
-            if last_line != Some(run.line_i) {
-                total_lines += 1;
-                last_line = Some(run.line_i);
+        {
+            let mut cache = self.text_cache.lock().unwrap();
+            if cache.len() == cache.cap().get() {
+                grow_text_cache(&mut cache);
             }
-            max_width = max_width.max(run.line_w);
+            cache.put(key, Box::new(cached));
         }
 
-        let total_height = if total_lines == 0 {
-            0.0
-        } else {
-            total_lines as f32 * DEFAULT_LINE_HEIGHT
-        };
-
-        let size = Size {
-            width: max_width,
-            height: total_height,
-        };
-
-        let mut cache = self.cache.lock().unwrap();
-        cache.put(key, size);
-
-        compose_ui::TextMetrics {
-            width: size.width,
-            height: size.height,
-        }
+        metrics
     }
 }

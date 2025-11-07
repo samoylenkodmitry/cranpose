@@ -3,6 +3,7 @@
 use crate::font::{PreferredFont, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT};
 use crate::scene::{DrawShape, TextDraw};
 use crate::shaders;
+use crate::text_cache::{grow_text_cache, CachedTextBuffer, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Rect};
 use glyphon::{
@@ -12,11 +13,7 @@ use glyphon::{
 use lru::LruCache;
 use std::collections::BTreeMap;
 use std::mem;
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-
-const TEXT_CACHE_INITIAL_CAPACITY: usize = 128;
-const TEXT_CACHE_MAX_CAPACITY: usize = 4096;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -63,99 +60,6 @@ struct ShapeData {
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct GradientStop {
     color: [f32; 4],
-}
-
-#[derive(Clone, Hash, PartialEq, Eq)]
-struct TextCacheKey {
-    text: String,
-    scale_key: u32,
-}
-
-impl TextCacheKey {
-    fn new(text: &str, scale: f32) -> Self {
-        let scaled = (scale * 1000.0).round().max(0.0);
-        let scale_key = scaled.min(u32::MAX as f32) as u32;
-        Self {
-            text: text.to_string(),
-            scale_key,
-        }
-    }
-
-    fn scale_key(&self) -> u32 {
-        self.scale_key
-    }
-}
-
-struct CachedTextBuffer {
-    buffer: Buffer,
-    metrics: Metrics,
-    scale_key: u32,
-    height: f32,
-    text: String,
-}
-
-impl CachedTextBuffer {
-    fn new(
-        font_system: &mut FontSystem,
-        metrics: Metrics,
-        scale_key: u32,
-        height: f32,
-        text: &str,
-        attrs: Attrs,
-    ) -> Self {
-        let mut buffer = Buffer::new(font_system, metrics);
-        buffer.set_size(font_system, f32::MAX, height);
-        buffer.set_text(font_system, text, attrs, Shaping::Advanced);
-        buffer.shape_until_scroll(font_system);
-        Self {
-            buffer,
-            metrics,
-            scale_key,
-            height,
-            text: text.to_string(),
-        }
-    }
-
-    fn ensure(
-        &mut self,
-        font_system: &mut FontSystem,
-        metrics: Metrics,
-        scale_key: u32,
-        height: f32,
-        text: &str,
-        attrs: Attrs,
-    ) -> bool {
-        const HEIGHT_EPSILON: f32 = 0.5;
-
-        let mut reshaped = false;
-
-        if self.scale_key != scale_key || self.metrics != metrics {
-            self.buffer.set_metrics(font_system, metrics);
-            self.metrics = metrics;
-            self.scale_key = scale_key;
-            reshaped = true;
-        }
-
-        if (height - self.height).abs() > HEIGHT_EPSILON {
-            self.buffer.set_size(font_system, f32::MAX, height);
-            self.height = height;
-            reshaped = true;
-        }
-
-        if self.text != text {
-            self.buffer
-                .set_text(font_system, text, attrs, Shaping::Advanced);
-            self.text.clear();
-            self.text.push_str(text);
-            reshaped = true;
-        }
-
-        if reshaped {
-            self.buffer.shape_until_scroll(font_system);
-        }
-
-        reshaped
-    }
 }
 
 struct PreparedTextArea {
@@ -327,33 +231,18 @@ pub struct GpuRenderer {
     text_renderer: TextRenderer,
     text_atlas: TextAtlas,
     swash_cache: SwashCache,
-    text_cache: LruCache<TextCacheKey, Box<CachedTextBuffer>>,
+    text_cache: Arc<Mutex<LruCache<TextCacheKey, Box<CachedTextBuffer>>>>,
     preferred_font: Option<PreferredFont>,
 }
 
 impl GpuRenderer {
-    fn grow_text_cache(&mut self) {
-        let current_cap = self.text_cache.cap().get();
-        if current_cap >= TEXT_CACHE_MAX_CAPACITY {
-            return;
-        }
-
-        let mut new_cap = (current_cap * 2).max(TEXT_CACHE_INITIAL_CAPACITY);
-        if new_cap > TEXT_CACHE_MAX_CAPACITY {
-            new_cap = TEXT_CACHE_MAX_CAPACITY;
-        }
-
-        if let Some(capacity) = NonZeroUsize::new(new_cap) {
-            self.text_cache.resize(capacity);
-        }
-    }
-
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         font_system: Arc<Mutex<FontSystem>>,
         preferred_font: Option<PreferredFont>,
+        text_cache: Arc<Mutex<LruCache<TextCacheKey, Box<CachedTextBuffer>>>>,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shape Shader"),
@@ -470,8 +359,6 @@ impl GpuRenderer {
         );
 
         let shape_buffers = ShapeBatchBuffers::new(&device, &shape_bind_group_layout);
-
-        let text_cache = LruCache::new(NonZeroUsize::new(TEXT_CACHE_INITIAL_CAPACITY).unwrap());
 
         Self {
             device,
@@ -724,6 +611,7 @@ impl GpuRenderer {
         // Render text
         {
             let mut font_system = self.font_system.lock().unwrap();
+            let mut text_cache = self.text_cache.lock().unwrap();
             let total_texts = sorted_texts.len();
             let mut skipped_zero_scale = 0usize;
             let mut skipped_invalid_clip = 0usize;
@@ -779,7 +667,7 @@ impl GpuRenderer {
                 let key = TextCacheKey::new(&text_draw.text, text_scale);
                 let mut reshaped = false;
 
-                if let Some(entry) = self.text_cache.get_mut(&key) {
+                if let Some(entry) = text_cache.get_mut(&key) {
                     let attrs = match self.preferred_font.as_ref() {
                         Some(font) => Attrs::new()
                             .family(Family::Name(&font.family))
@@ -796,10 +684,8 @@ impl GpuRenderer {
                     );
                     log_text_glyphs(&font_system, &entry.buffer, text_draw, text_scale);
                 } else {
-                    if self.text_cache.len() == self.text_cache.cap().get() {
-                        drop(font_system);
-                        self.grow_text_cache();
-                        font_system = self.font_system.lock().unwrap();
+                    if text_cache.len() == text_cache.cap().get() {
+                        grow_text_cache(&mut text_cache);
                     }
 
                     let attrs = match self.preferred_font.as_ref() {
@@ -816,9 +702,8 @@ impl GpuRenderer {
                         &text_draw.text,
                         attrs,
                     );
-                    self.text_cache.put(key.clone(), Box::new(cached));
-                    let entry = self
-                        .text_cache
+                    text_cache.put(key.clone(), Box::new(cached));
+                    let entry = text_cache
                         .get_mut(&key)
                         .expect("text cache entry missing after insertion");
                     log_text_glyphs(&font_system, &entry.buffer, text_draw, text_scale);
@@ -880,7 +765,7 @@ impl GpuRenderer {
             if prepared_texts > 0 {
                 let mut text_areas = Vec::with_capacity(prepared_texts);
                 for area in &mut prepared_areas {
-                    if let Some(entry) = self.text_cache.peek(&area.key) {
+                    if let Some(entry) = text_cache.peek(&area.key) {
                         let buffer_ref: &Buffer = &entry.buffer;
                         text_areas.push(TextArea {
                             buffer: buffer_ref,
@@ -894,7 +779,7 @@ impl GpuRenderer {
                         if log::log_enabled!(log::Level::Debug) {
                             log::debug!(
                                 "GPU text cache entry for \"{}\" was evicted before rendering; reshaping on the fly",
-                                text_preview(&area.key.text)
+                                text_preview(area.key.text())
                             );
                         }
 
@@ -910,7 +795,12 @@ impl GpuRenderer {
                                 .weight(font.weight),
                             None => Attrs::new().family(Family::SansSerif),
                         };
-                        buffer.set_text(&mut font_system, &area.key.text, attrs, Shaping::Advanced);
+                        buffer.set_text(
+                            &mut font_system,
+                            area.key.text(),
+                            attrs,
+                            Shaping::Advanced,
+                        );
                         buffer.shape_until_scroll(&mut font_system);
                         area.fallback = Some(Box::new(buffer));
                         let buffer_ref: &Buffer = area
@@ -943,6 +833,7 @@ impl GpuRenderer {
 
                 self.text_atlas.trim();
             }
+            drop(text_cache);
         }
 
         {
