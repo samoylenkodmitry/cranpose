@@ -2,13 +2,14 @@
 
 use crate::scene::{DrawShape, TextDraw};
 use crate::shaders;
+use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey};
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Color};
 use glyphon::{
-    Attrs, Buffer, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping,
+    Attrs, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 // Chunked rendering constants for robustness with large scenes
@@ -61,43 +62,8 @@ struct GradientStop {
     color: [f32; 4],
 }
 
-/// Cached text buffer for text shaping
-struct CachedTextBuffer {
-    buffer: Buffer,
-    // Track what's cached to avoid redundant reshaping
-    text: String,
-    scale: f32,
-}
-
-impl CachedTextBuffer {
-    /// Ensure the buffer has the correct text and metrics, only reshaping if needed
-    /// Returns true if reshaping occurred
-    fn ensure(
-        &mut self,
-        font_system: &mut FontSystem,
-        text: &str,
-        scale: f32,
-        attrs: Attrs,
-    ) -> bool {
-        // Check if anything changed that requires reshaping
-        if self.text == text && self.scale == scale {
-            return false; // No reshaping needed!
-        }
-
-        // Something changed, need to reshape
-        let metrics = Metrics::new(14.0 * scale, 20.0 * scale);
-        self.buffer.set_metrics(font_system, metrics);
-        self.buffer.set_text(font_system, text, attrs, Shaping::Advanced);
-        self.buffer.shape_until_scroll(font_system);
-
-        // Update cached values
-        self.text.clear();
-        self.text.push_str(text);
-        self.scale = scale;
-
-        true
-    }
-}
+// Cached text buffer is now defined in lib.rs as SharedTextBuffer and shared
+// between measurement and rendering to eliminate duplicate text shaping
 
 /// Persistent GPU buffers for batched shape rendering
 struct ShapeBatchBuffers {
@@ -262,14 +228,7 @@ impl ShapeBatchBuffers {
     }
 }
 
-/// Hash key for text caching - only content matters, not position
-#[derive(Hash, Eq, PartialEq, Clone)]
-struct TextKey {
-    text: String,
-    scale_bits: u32,
-    // NOTE: Removed rect and z_index - text shaping only depends on content + scale
-    // Position is applied during rendering, not shaping
-}
+// TextCacheKey is now defined in lib.rs and shared between measurement and rendering
 
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
@@ -284,8 +243,8 @@ pub struct GpuRenderer {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     shape_buffers: ShapeBatchBuffers,
-    // Text cache (content-based, not GPU buffers)
-    text_cache: HashMap<TextKey, CachedTextBuffer>,
+    // Shared text cache used by both measurement and rendering
+    text_cache: SharedTextCache,
 }
 
 impl GpuRenderer {
@@ -294,6 +253,7 @@ impl GpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         font_system: Arc<Mutex<FontSystem>>,
+        text_cache: SharedTextCache,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shape Shader"),
@@ -420,14 +380,7 @@ impl GpuRenderer {
             uniform_buffer,
             uniform_bind_group,
             shape_buffers,
-            text_cache: HashMap::new(),
-        }
-    }
-
-    fn create_text_key(text: &TextDraw) -> TextKey {
-        TextKey {
-            text: text.text.clone(),
-            scale_bits: text.scale.to_bits(),
+            text_cache,
         }
     }
 
@@ -646,14 +599,14 @@ impl GpuRenderer {
         let mut font_system = self.font_system.lock().unwrap();
 
         // Collect keys for current frame text using HashSet for O(1) lookups
-        let current_text_keys: HashSet<TextKey> = sorted_texts
+        let current_text_keys: HashSet<TextCacheKey> = sorted_texts
             .iter()
             .filter(|t| !t.text.is_empty() && t.rect.width > 0.0 && t.rect.height > 0.0)
-            .map(|text| Self::create_text_key(text))
+            .map(|text| TextCacheKey::new(&text.text, 14.0 * text.scale))
             .collect();
 
         // Remove cache entries for text no longer present (O(1) lookups via HashSet)
-        self.text_cache.retain(|key, _| current_text_keys.contains(key));
+        self.text_cache.lock().unwrap().retain(|key, _| current_text_keys.contains(key));
 
         // Create or update cached text buffers (only reshape when needed)
         for text_draw in &sorted_texts {
@@ -662,16 +615,18 @@ impl GpuRenderer {
                 continue;
             }
 
-            let key = Self::create_text_key(text_draw);
+            let key = TextCacheKey::new(&text_draw.text, 14.0 * text_draw.scale);
+            let font_size = 14.0 * text_draw.scale;
 
-            if let Some(cached) = self.text_cache.get_mut(&key) {
+            let mut text_cache = self.text_cache.lock().unwrap();
+            if let Some(cached) = text_cache.get_mut(&key) {
                 // Already in cache - use ensure() to only reshape if needed
-                cached.ensure(&mut font_system, &text_draw.text, text_draw.scale, Attrs::new());
+                cached.ensure(&mut font_system, &text_draw.text, font_size, Attrs::new());
             } else {
                 // Not in cache, create new buffer
-                let mut buffer = Buffer::new(
+                let mut buffer = glyphon::Buffer::new(
                     &mut font_system,
-                    Metrics::new(14.0 * text_draw.scale, 20.0 * text_draw.scale),
+                    Metrics::new(font_size, font_size * 1.4),
                 );
                 buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
                 buffer.set_text(
@@ -682,28 +637,30 @@ impl GpuRenderer {
                 );
                 buffer.shape_until_scroll(&mut font_system);
 
-                self.text_cache.insert(
+                text_cache.insert(
                     key,
-                    CachedTextBuffer {
+                    SharedTextBuffer {
                         buffer,
                         text: text_draw.text.clone(),
-                        scale: text_draw.scale,
+                        font_size,
+                        cached_size: None,
                     },
                 );
             }
         }
 
         // Collect text data from cache
-        let text_data: Vec<(&TextDraw, TextKey)> = sorted_texts
+        let text_data: Vec<(&TextDraw, TextCacheKey)> = sorted_texts
             .iter()
             .filter(|t| !t.text.is_empty() && t.rect.width > 0.0 && t.rect.height > 0.0)
-            .map(|text| (text, Self::create_text_key(text)))
+            .map(|text| (text, TextCacheKey::new(&text.text, 14.0 * text.scale)))
             .collect();
 
         // Create text areas using cached buffers
         let mut text_areas = Vec::new();
+        let text_cache = self.text_cache.lock().unwrap();
         for (text_draw, key) in &text_data {
-            let cached = self.text_cache.get(key).expect("Text should be in cache");
+            let cached = text_cache.get(key).expect("Text should be in cache");
             let color = GlyphonColor::rgba(
                 (text_draw.color.r() * 255.0) as u8,
                 (text_draw.color.g() * 255.0) as u8,

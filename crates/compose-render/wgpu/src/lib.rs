@@ -16,6 +16,8 @@ use compose_ui_graphics::Size;
 use glyphon::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use lru::LruCache;
 use render::GpuRenderer;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +26,104 @@ pub enum WgpuRendererError {
     Layout(String),
     Wgpu(String),
 }
+
+/// Unified hash key for text caching - shared between measurement and rendering
+/// Only content + scale matter, not position
+#[derive(Clone)]
+pub(crate) struct TextCacheKey {
+    text: String,
+    scale_bits: u32, // f32 as bits for hashing
+}
+
+impl TextCacheKey {
+    fn new(text: &str, font_size: f32) -> Self {
+        Self {
+            text: text.to_string(),
+            scale_bits: font_size.to_bits(),
+        }
+    }
+}
+
+impl Hash for TextCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.text.hash(state);
+        self.scale_bits.hash(state);
+    }
+}
+
+impl PartialEq for TextCacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.scale_bits == other.scale_bits
+    }
+}
+
+impl Eq for TextCacheKey {}
+
+/// Cached text buffer shared between measurement and rendering
+pub(crate) struct SharedTextBuffer {
+    pub(crate) buffer: Buffer,
+    text: String,
+    font_size: f32,
+    /// Cached size to avoid recalculating on every access
+    cached_size: Option<Size>,
+}
+
+impl SharedTextBuffer {
+    /// Ensure the buffer has the correct text and font_size, only reshaping if needed
+    /// Returns true if reshaping occurred
+    pub(crate) fn ensure(
+        &mut self,
+        font_system: &mut FontSystem,
+        text: &str,
+        font_size: f32,
+        attrs: Attrs,
+    ) -> bool {
+        // Check if anything changed that requires reshaping
+        if self.text == text && self.font_size == font_size {
+            return false; // No reshaping needed!
+        }
+
+        // Something changed, need to reshape
+        let metrics = Metrics::new(font_size, font_size * 1.4);
+        self.buffer.set_metrics(font_system, metrics);
+        self.buffer.set_text(font_system, text, attrs, Shaping::Advanced);
+        self.buffer.shape_until_scroll(font_system);
+
+        // Update cached values
+        self.text.clear();
+        self.text.push_str(text);
+        self.font_size = font_size;
+        self.cached_size = None; // Invalidate size cache
+
+        true
+    }
+
+    /// Get or calculate the size of the shaped text
+    pub(crate) fn size(&mut self, font_size: f32) -> Size {
+        if let Some(size) = self.cached_size {
+            return size;
+        }
+
+        // Calculate size from buffer
+        let mut max_width = 0.0f32;
+        let layout_runs = self.buffer.layout_runs();
+        for run in layout_runs {
+            max_width = max_width.max(run.line_w);
+        }
+        let total_height = self.buffer.lines.len() as f32 * font_size * 1.4;
+
+        let size = Size {
+            width: max_width,
+            height: total_height,
+        };
+
+        self.cached_size = Some(size);
+        size
+    }
+}
+
+/// Shared cache for text buffers used by both measurement and rendering
+pub(crate) type SharedTextCache = Arc<Mutex<HashMap<TextCacheKey, SharedTextBuffer>>>;
 
 /// WGPU-based renderer for GPU-accelerated 2D rendering.
 ///
@@ -36,6 +136,8 @@ pub struct WgpuRenderer {
     scene: Scene,
     gpu_renderer: Option<GpuRenderer>,
     font_system: Arc<Mutex<FontSystem>>,
+    /// Shared text buffer cache used by both measurement and rendering
+    text_cache: SharedTextCache,
 }
 
 impl WgpuRenderer {
@@ -49,13 +151,18 @@ impl WgpuRenderer {
         font_system.db_mut().load_font_data(font_data.to_vec());
 
         let font_system = Arc::new(Mutex::new(font_system));
-        let text_measurer = WgpuTextMeasurer::new(font_system.clone());
+
+        // Create shared text cache for both measurement and rendering
+        let text_cache = Arc::new(Mutex::new(HashMap::new()));
+
+        let text_measurer = WgpuTextMeasurer::new(font_system.clone(), text_cache.clone());
         set_text_measurer(text_measurer.clone());
 
         Self {
             scene: Scene::new(),
             gpu_renderer: None,
             font_system,
+            text_cache,
         }
     }
 
@@ -71,6 +178,7 @@ impl WgpuRenderer {
             queue,
             surface_format,
             self.font_system.clone(),
+            self.text_cache.clone(),
         ));
     }
 
@@ -123,54 +231,21 @@ impl Renderer for WgpuRenderer {
 
 // Text measurer implementation for WGPU
 
-/// Cached measurement buffer to avoid redundant text shaping
-struct MeasurementBuffer {
-    buffer: Buffer,
-    text: String,
-    font_size: f32,
-}
-
-impl MeasurementBuffer {
-    fn ensure(
-        &mut self,
-        font_system: &mut FontSystem,
-        text: &str,
-        font_size: f32,
-        attrs: Attrs,
-    ) -> bool {
-        // Check if anything changed that requires reshaping
-        if self.text == text && self.font_size == font_size {
-            return false; // No reshaping needed!
-        }
-
-        // Something changed, need to reshape
-        let metrics = Metrics::new(font_size, font_size * 1.4);
-        self.buffer.set_metrics(font_system, metrics);
-        self.buffer.set_text(font_system, text, attrs, Shaping::Advanced);
-        self.buffer.shape_until_scroll(font_system);
-
-        // Update cached values
-        self.text.clear();
-        self.text.push_str(text);
-        self.font_size = font_size;
-
-        true
-    }
-}
-
 #[derive(Clone)]
 struct WgpuTextMeasurer {
     font_system: Arc<Mutex<FontSystem>>,
-    cache: Arc<Mutex<LruCache<(String, i32), Size>>>,
-    buffer_cache: Arc<Mutex<LruCache<(String, i32), Box<MeasurementBuffer>>>>,
+    /// Size-only cache for ultra-fast lookups
+    size_cache: Arc<Mutex<LruCache<(String, i32), Size>>>,
+    /// Shared buffer cache used by both measurement and rendering
+    text_cache: SharedTextCache,
 }
 
 impl WgpuTextMeasurer {
-    fn new(font_system: Arc<Mutex<FontSystem>>) -> Self {
+    fn new(font_system: Arc<Mutex<FontSystem>>, text_cache: SharedTextCache) -> Self {
         Self {
             font_system,
-            cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap()))),
-            buffer_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap()))),
+            size_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap()))),
+            text_cache,
         }
     }
 }
@@ -178,12 +253,12 @@ impl WgpuTextMeasurer {
 impl TextMeasurer for WgpuTextMeasurer {
     fn measure(&self, text: &str) -> compose_ui::TextMetrics {
         let font_size = 14.0; // Default font size
-        let key = (text.to_string(), (font_size * 100.0) as i32);
+        let size_key = (text.to_string(), (font_size * 100.0) as i32);
 
         // Check size cache first (fastest path)
         {
-            let mut cache = self.cache.lock().unwrap();
-            if let Some(size) = cache.get(&key) {
+            let mut cache = self.size_cache.lock().unwrap();
+            if let Some(size) = cache.get(&size_key) {
                 // Size cache HIT - fastest path!
                 return compose_ui::TextMetrics {
                     width: size.width,
@@ -192,16 +267,18 @@ impl TextMeasurer for WgpuTextMeasurer {
             }
         }
 
-        // Need to measure - check buffer cache
+        // Need to measure - check shared text cache
+        let cache_key = TextCacheKey::new(text, font_size);
         let mut font_system = self.font_system.lock().unwrap();
-        let mut buffer_cache = self.buffer_cache.lock().unwrap();
+        let mut text_cache = self.text_cache.lock().unwrap();
 
-        let buffer = if let Some(cached) = buffer_cache.get_mut(&key) {
-            // Buffer cache hit - use ensure() to only reshape if needed
+        // Get or create cached buffer and measure it
+        let size = if let Some(cached) = text_cache.get_mut(&cache_key) {
+            // Shared cache hit - use ensure() to only reshape if needed
             cached.ensure(&mut font_system, text, font_size, Attrs::new());
-            &cached.buffer
+            cached.size(font_size)
         } else {
-            // Buffer cache miss - create new buffer
+            // Cache miss - create new buffer and add to shared cache
             let mut new_buffer = Buffer::new(&mut font_system, Metrics::new(font_size, font_size * 1.4));
             new_buffer.set_size(&mut font_system, f32::MAX, f32::MAX);
             new_buffer.set_text(
@@ -212,36 +289,20 @@ impl TextMeasurer for WgpuTextMeasurer {
             );
             new_buffer.shape_until_scroll(&mut font_system);
 
-            let cached = Box::new(MeasurementBuffer {
+            let mut shared_buffer = SharedTextBuffer {
                 buffer: new_buffer,
                 text: text.to_string(),
                 font_size,
-            });
-            buffer_cache.put(key.clone(), cached);
-            &buffer_cache.get(&key).unwrap().buffer
-        };
-
-        // Measure the shaped buffer
-        let mut max_width = 0.0f32;
-        let mut total_height = 0.0f32;
-
-        for _line in buffer.lines.iter() {
-            let layout_runs = buffer.layout_runs();
-            for run in layout_runs {
-                max_width = max_width.max(run.line_w);
-                break; // Just get the first run's width
-            }
-            total_height += font_size * 1.4;
-        }
-
-        let size = Size {
-            width: max_width,
-            height: total_height,
+                cached_size: None,
+            };
+            let size = shared_buffer.size(font_size);
+            text_cache.insert(cache_key, shared_buffer);
+            size
         };
 
         // Cache the size result
-        let mut cache = self.cache.lock().unwrap();
-        cache.put(key, size);
+        let mut size_cache = self.size_cache.lock().unwrap();
+        size_cache.put(size_key, size);
 
         compose_ui::TextMetrics {
             width: size.width,
