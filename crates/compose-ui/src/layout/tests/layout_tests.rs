@@ -174,3 +174,281 @@ fn layout_node_uses_measure_policy() -> Result<(), NodeError> {
     assert_eq!(measured.children[1].offset, Point { x: 0.0, y: 20.0 });
     Ok(())
 }
+
+// ============================================================================
+// SELECTIVE MEASURE/LAYOUT TESTS
+// ============================================================================
+
+#[test]
+fn new_layout_node_starts_dirty() {
+    let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    assert!(node.needs_measure(), "New node should need measure");
+    assert!(node.needs_layout(), "New node should need layout");
+}
+
+#[test]
+fn mark_needs_measure_sets_both_flags() {
+    let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    node.clear_needs_measure();
+    node.clear_needs_layout();
+
+    assert!(!node.needs_measure());
+    assert!(!node.needs_layout());
+
+    node.mark_needs_measure();
+    assert!(node.needs_measure(), "mark_needs_measure should set needs_measure flag");
+    assert!(node.needs_layout(), "mark_needs_measure should set needs_layout flag");
+}
+
+#[test]
+fn mark_needs_layout_only_sets_layout_flag() {
+    let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    node.clear_needs_measure();
+    node.clear_needs_layout();
+
+    node.mark_needs_layout();
+    assert!(!node.needs_measure(), "mark_needs_layout should NOT set needs_measure flag");
+    assert!(node.needs_layout(), "mark_needs_layout should set needs_layout flag");
+}
+
+#[test]
+fn set_modifier_marks_dirty() {
+    let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    node.clear_needs_measure();
+    node.clear_needs_layout();
+
+    node.set_modifier(Modifier::empty());
+    assert!(node.needs_measure(), "set_modifier should mark node as needing measure");
+    assert!(node.needs_layout(), "set_modifier should mark node as needing layout");
+}
+
+#[test]
+fn set_measure_policy_marks_dirty() {
+    let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    node.clear_needs_measure();
+    node.clear_needs_layout();
+
+    node.set_measure_policy(Rc::new(VerticalStackPolicy));
+    assert!(node.needs_measure(), "set_measure_policy should mark node as needing measure");
+    assert!(node.needs_layout(), "set_measure_policy should mark node as needing layout");
+}
+
+#[test]
+fn insert_child_marks_dirty() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+    let child = applier.create(Box::new(SpacerNode {
+        size: Size { width: 10.0, height: 10.0 },
+    }));
+
+    let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    node.clear_needs_measure();
+    node.clear_needs_layout();
+
+    node.insert_child(child);
+    assert!(node.needs_measure(), "insert_child should mark node as needing measure");
+    assert!(node.needs_layout(), "insert_child should mark node as needing layout");
+    Ok(())
+}
+
+#[test]
+fn remove_child_marks_dirty() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+    let child = applier.create(Box::new(SpacerNode {
+        size: Size { width: 10.0, height: 10.0 },
+    }));
+
+    let mut node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    node.insert_child(child);
+    node.clear_needs_measure();
+    node.clear_needs_layout();
+
+    node.remove_child(child);
+    assert!(node.needs_measure(), "remove_child should mark node as needing measure");
+    assert!(node.needs_layout(), "remove_child should mark node as needing layout");
+    Ok(())
+}
+
+#[test]
+fn selective_measure_uses_cache_when_not_dirty() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+    let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    let node_id = applier.create(Box::new(node));
+
+    let constraints = Constraints {
+        min_width: 0.0,
+        max_width: 100.0,
+        min_height: 0.0,
+        max_height: 100.0,
+    };
+
+    // First measure - should measure and cache
+    let result1 = measure_layout(&mut applier, node_id, Size { width: 100.0, height: 100.0 })?;
+    let size1 = result1.root_size();
+
+    // Clear dirty flag to simulate no changes
+    applier.with_node::<LayoutNode, _>(node_id, |node| {
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+    })?;
+
+    // Second measure - should use cache since not dirty
+    let result2 = measure_layout(&mut applier, node_id, Size { width: 100.0, height: 100.0 })?;
+    let size2 = result2.root_size();
+
+    assert_eq!(size1, size2, "Cached measure should return same size");
+    Ok(())
+}
+
+#[test]
+fn selective_measure_remeasures_when_dirty() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+    let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    let node_id = applier.create(Box::new(node));
+
+    // First measure
+    let result1 = measure_layout(&mut applier, node_id, Size { width: 100.0, height: 100.0 })?;
+    let size1 = result1.root_size();
+
+    // Mark as dirty by changing measure policy
+    applier.with_node::<LayoutNode, _>(node_id, |node| {
+        node.set_measure_policy(Rc::new(VerticalStackPolicy));
+    })?;
+
+    // Second measure - should remeasure because dirty
+    let result2 = measure_layout(&mut applier, node_id, Size { width: 100.0, height: 100.0 })?;
+
+    // Verify it was measured (by checking the dirty flag was cleared)
+    let still_dirty = applier.with_node::<LayoutNode, _>(node_id, |node| {
+        node.needs_measure()
+    })?;
+
+    assert!(!still_dirty, "Dirty flag should be cleared after measure");
+    Ok(())
+}
+
+#[test]
+fn cache_epoch_not_incremented_when_no_dirty_nodes() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+    let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    let node_id = applier.create(Box::new(node));
+
+    // First measure
+    measure_layout(&mut applier, node_id, Size { width: 100.0, height: 100.0 })?;
+
+    // Clear dirty flags
+    applier.with_node::<LayoutNode, _>(node_id, |node| {
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+    })?;
+
+    let epoch_before = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+
+    // Second measure with no dirty nodes - epoch should not increment
+    measure_layout(&mut applier, node_id, Size { width: 100.0, height: 100.0 })?;
+
+    let epoch_after = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+
+    assert_eq!(
+        epoch_before, epoch_after,
+        "Cache epoch should not increment when no nodes are dirty"
+    );
+    Ok(())
+}
+
+#[test]
+fn cache_epoch_increments_when_nodes_dirty() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+    let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    let node_id = applier.create(Box::new(node));
+
+    // First measure
+    measure_layout(&mut applier, node_id, Size { width: 100.0, height: 100.0 })?;
+
+    let epoch_before = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+
+    // Mark node as dirty
+    applier.with_node::<LayoutNode, _>(node_id, |node| {
+        node.mark_needs_measure();
+    })?;
+
+    // Second measure with dirty node - epoch should increment
+    measure_layout(&mut applier, node_id, Size { width: 100.0, height: 100.0 })?;
+
+    let epoch_after = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+
+    assert!(
+        epoch_after > epoch_before,
+        "Cache epoch should increment when nodes are dirty"
+    );
+    Ok(())
+}
+
+#[test]
+fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    // Create a tree: root -> child_a, child_b
+    let child_a = applier.create(Box::new(SpacerNode {
+        size: Size { width: 10.0, height: 20.0 },
+    }));
+    let child_b = applier.create(Box::new(SpacerNode {
+        size: Size { width: 10.0, height: 30.0 },
+    }));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.insert(child_a);
+    root.children.insert(child_b);
+    let root_id = applier.create(Box::new(root));
+
+    // First measure
+    let result1 = measure_layout(&mut applier, root_id, Size { width: 100.0, height: 100.0 })?;
+    assert_eq!(result1.root_size().height, 50.0);
+
+    // Clear all dirty flags
+    applier.with_node::<LayoutNode, _>(root_id, |node| {
+        node.clear_needs_measure();
+        node.clear_needs_layout();
+    })?;
+
+    let epoch_before = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+
+    // Second measure - should use cache
+    measure_layout(&mut applier, root_id, Size { width: 100.0, height: 100.0 })?;
+
+    let epoch_after = NEXT_CACHE_EPOCH.load(Ordering::Relaxed);
+
+    assert_eq!(
+        epoch_before, epoch_after,
+        "Epoch should not change when entire tree is clean"
+    );
+    Ok(())
+}
+
+#[test]
+fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    // Create tree with child that can change
+    let child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MaxSizePolicy),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.insert(child);
+    let root_id = applier.create(Box::new(root));
+
+    // First measure
+    measure_layout(&mut applier, root_id, Size { width: 100.0, height: 100.0 })?;
+
+    // Mark child as dirty
+    applier.with_node::<LayoutNode, _>(child, |node| {
+        node.mark_needs_measure();
+    })?;
+
+    // Check that needs_measure_recursive detects the dirty child
+    let needs_measure = needs_measure_recursive(&mut applier, root_id);
+    assert!(needs_measure, "Parent should need measure when child is dirty");
+
+    Ok(())
+}

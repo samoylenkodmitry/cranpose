@@ -235,6 +235,25 @@ impl LayoutMeasurements {
     }
 }
 
+/// Check if a node needs measure (selective measure optimization).
+fn needs_measure_recursive(applier: &mut MemoryApplier, node_id: NodeId) -> bool {
+    // Check if this node needs measure
+    if let Ok(needs) = applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_measure()) {
+        if needs {
+            return true;
+        }
+        // Also check children
+        if let Ok(children) = applier.with_node::<LayoutNode, _>(node_id, |node| node.children.iter().copied().collect::<Vec<_>>()) {
+            for child_id in children {
+                if needs_measure_recursive(applier, child_id) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Runs the measure phase for the subtree rooted at `root`.
 pub fn measure_layout(
     applier: &mut MemoryApplier,
@@ -247,9 +266,19 @@ pub fn measure_layout(
         min_height: 0.0,
         max_height: max_size.height,
     };
+
+    // Selective measure: only increment epoch if something needs measuring
+    let needs_measure = needs_measure_recursive(applier, root);
+    let epoch = if needs_measure {
+        NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
+    } else {
+        // Reuse the previous epoch to allow cache hits
+        NEXT_CACHE_EPOCH.load(Ordering::Relaxed).saturating_sub(1).max(1)
+    };
+
     let original_applier = std::mem::replace(applier, MemoryApplier::new());
     let applier_host = Rc::new(ConcreteApplierHost::new(original_applier));
-    let mut builder = LayoutBuilder::new(Rc::clone(&applier_host));
+    let mut builder = LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), epoch);
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
     let metadata = {
         let mut applier_ref = applier_host.borrow_typed();
@@ -274,6 +303,12 @@ impl LayoutBuilder {
     fn new(applier: Rc<ConcreteApplierHost<MemoryApplier>>) -> Self {
         Self {
             state: Rc::new(RefCell::new(LayoutBuilderState::new(applier))),
+        }
+    }
+
+    fn new_with_epoch(applier: Rc<ConcreteApplierHost<MemoryApplier>>, epoch: u64) -> Self {
+        Self {
+            state: Rc::new(RefCell::new(LayoutBuilderState::new_with_epoch(applier, epoch))),
         }
     }
 
@@ -322,7 +357,19 @@ impl LayoutBuilderState {
             applier,
             runtime_handle,
             slots: SlotBackend::default(),
-            cache_epoch: NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed),
+            cache_epoch: 0, // Will be set explicitly
+            tmp_measurables: Vec::new(),
+            tmp_records: Vec::new(),
+        }
+    }
+
+    fn new_with_epoch(applier: Rc<ConcreteApplierHost<MemoryApplier>>, epoch: u64) -> Self {
+        let runtime_handle = applier.borrow_typed().runtime_handle();
+        Self {
+            applier,
+            runtime_handle,
+            slots: SlotBackend::default(),
+            cache_epoch: epoch,
             tmp_measurables: Vec::new(),
             tmp_records: Vec::new(),
         }
@@ -529,9 +576,26 @@ impl LayoutBuilderState {
             measure_policy,
             children,
             cache,
+            needs_measure,
         } = snapshot;
         cache.activate(cache_epoch);
+
+        // Selective measure: if node doesn't need measure and we have a cached result, use it
+        if !needs_measure {
+            if let Some(cached) = cache.get_measurement(constraints) {
+                return Ok(cached);
+            }
+        }
+
+        // Otherwise check cache normally (for different constraints)
         if let Some(cached) = cache.get_measurement(constraints) {
+            // Clear dirty flag after successful measure
+            Self::with_applier_result(&state_rc, |applier| {
+                applier.with_node::<LayoutNode, _>(node_id, |node| {
+                    node.clear_needs_measure();
+                    node.clear_needs_layout();
+                })
+            }).ok();
             return Ok(cached);
         }
 
@@ -730,6 +794,14 @@ impl LayoutBuilderState {
 
         cache.store_measurement(constraints, Rc::clone(&measured));
 
+        // Clear dirty flags after successful measure
+        Self::with_applier_result(&state_rc, |applier| {
+            applier.with_node::<LayoutNode, _>(node_id, |node| {
+                node.clear_needs_measure();
+                node.clear_needs_layout();
+            })
+        }).ok();
+
         Ok(measured)
     }
 
@@ -758,6 +830,7 @@ struct LayoutNodeSnapshot {
     measure_policy: Rc<dyn MeasurePolicy>,
     children: Vec<NodeId>,
     cache: LayoutNodeCacheHandles,
+    needs_measure: bool,
 }
 
 impl LayoutNodeSnapshot {
@@ -767,6 +840,7 @@ impl LayoutNodeSnapshot {
             measure_policy: Rc::clone(&node.measure_policy),
             children: node.children.iter().copied().collect(),
             cache: node.cache_handles(),
+            needs_measure: node.needs_measure(),
         }
     }
 }

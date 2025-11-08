@@ -3,6 +3,7 @@ use compose_core::{Node, NodeId};
 use compose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
 use compose_ui_layout::{Constraints, MeasurePolicy};
 use indexmap::IndexSet;
+use std::cell::Cell;
 use std::hash::Hash;
 use std::{cell::RefCell, hash::Hasher, rc::Rc};
 
@@ -139,6 +140,9 @@ pub struct LayoutNode {
     pub measure_policy: Rc<dyn MeasurePolicy>,
     pub children: IndexSet<NodeId>,
     cache: LayoutNodeCacheHandles,
+    // Dirty flags for selective measure/layout/render
+    needs_measure: Cell<bool>,
+    needs_layout: Cell<bool>,
 }
 
 impl LayoutNode {
@@ -150,6 +154,8 @@ impl LayoutNode {
             measure_policy,
             children: IndexSet::new(),
             cache: LayoutNodeCacheHandles::default(),
+            needs_measure: Cell::new(true), // New nodes need initial measure
+            needs_layout: Cell::new(true),  // New nodes need initial layout
         };
         node.set_modifier(modifier);
         node
@@ -160,11 +166,44 @@ impl LayoutNode {
         self.mods
             .update_from_slice(self.modifier.elements(), &mut self.modifier_context);
         self.cache.clear();
+        self.mark_needs_measure();
     }
 
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
         self.measure_policy = policy;
         self.cache.clear();
+        self.mark_needs_measure();
+    }
+
+    /// Mark this node as needing measure. Also marks it as needing layout.
+    pub fn mark_needs_measure(&self) {
+        self.needs_measure.set(true);
+        self.needs_layout.set(true);
+    }
+
+    /// Mark this node as needing layout (but not necessarily measure).
+    pub fn mark_needs_layout(&self) {
+        self.needs_layout.set(true);
+    }
+
+    /// Check if this node needs measure.
+    pub fn needs_measure(&self) -> bool {
+        self.needs_measure.get()
+    }
+
+    /// Check if this node needs layout.
+    pub fn needs_layout(&self) -> bool {
+        self.needs_layout.get()
+    }
+
+    /// Clear the measure dirty flag after measuring.
+    pub(crate) fn clear_needs_measure(&self) {
+        self.needs_measure.set(false);
+    }
+
+    /// Clear the layout dirty flag after laying out.
+    pub(crate) fn clear_needs_layout(&self) {
+        self.needs_layout.set(false);
     }
 
     pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
@@ -181,6 +220,8 @@ impl Clone for LayoutNode {
             measure_policy: self.measure_policy.clone(),
             children: self.children.clone(),
             cache: self.cache.clone(),
+            needs_measure: Cell::new(self.needs_measure.get()),
+            needs_layout: Cell::new(self.needs_layout.get()),
         }
     }
 }
@@ -189,11 +230,13 @@ impl Node for LayoutNode {
     fn insert_child(&mut self, child: NodeId) {
         self.children.insert(child);
         self.cache.clear();
+        self.mark_needs_measure();
     }
 
     fn remove_child(&mut self, child: NodeId) {
         self.children.shift_remove(&child);
         self.cache.clear();
+        self.mark_needs_measure();
     }
 
     fn move_child(&mut self, from: usize, to: usize) {
@@ -209,6 +252,7 @@ impl Node for LayoutNode {
             self.children.insert(id);
         }
         self.cache.clear();
+        self.mark_needs_measure();
     }
 
     fn update_children(&mut self, children: &[NodeId]) {
@@ -217,6 +261,7 @@ impl Node for LayoutNode {
             self.children.insert(child);
         }
         self.cache.clear();
+        self.mark_needs_measure();
     }
 
     fn children(&self) -> Vec<NodeId> {
