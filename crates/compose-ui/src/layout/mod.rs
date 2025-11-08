@@ -235,23 +235,63 @@ impl LayoutMeasurements {
     }
 }
 
-/// Check if a node needs measure (selective measure optimization).
+/// Check if a node or any of its descendants needs measure (selective measure optimization).
+/// This can be used by the app shell to skip layout when the tree is clean.
+pub fn tree_needs_layout(applier: &mut MemoryApplier, root: NodeId) -> bool {
+    needs_measure_recursive(applier, root)
+}
+
+/// Internal recursive check for dirty nodes.
 fn needs_measure_recursive(applier: &mut MemoryApplier, node_id: NodeId) -> bool {
     // Check if this node needs measure
     if let Ok(needs) = applier.with_node::<LayoutNode, _>(node_id, |node| node.needs_measure()) {
         if needs {
             return true;
         }
-        // Also check children
-        if let Ok(children) = applier.with_node::<LayoutNode, _>(node_id, |node| node.children.iter().copied().collect::<Vec<_>>()) {
-            for child_id in children {
-                if needs_measure_recursive(applier, child_id) {
-                    return true;
+        // Check children without allocating - get count first, then iterate by index
+        if let Ok(child_count) = applier.with_node::<LayoutNode, _>(node_id, |node| node.children.len()) {
+            for i in 0..child_count {
+                if let Ok(child_id) = applier.with_node::<LayoutNode, _>(node_id, |node| {
+                    node.children.get_index(i).copied()
+                }) {
+                    if let Some(child_id) = child_id {
+                        if needs_measure_recursive(applier, child_id) {
+                            return true;
+                        }
+                    }
                 }
             }
         }
     }
     false
+}
+
+/// Bubble layout dirty flag up the parent chain (Jetpack Compose style).
+/// When a node becomes dirty, all ancestors need to know they have dirty descendants.
+pub fn bubble_layout_dirty(applier: &mut MemoryApplier, mut node_id: NodeId) {
+    loop {
+        // Get parent of current node
+        let parent_id = match applier.with_node::<LayoutNode, _>(node_id, |node| node.parent()) {
+            Ok(Some(pid)) => pid,
+            _ => break, // No parent or error - stop bubbling
+        };
+
+        // Mark parent as needing layout (not necessarily measure)
+        // The parent needs to re-layout its children, but its own size may not change
+        if applier.with_node::<LayoutNode, _>(parent_id, |node| {
+            // Only mark if not already marked (avoid infinite loops)
+            if !node.needs_layout() {
+                node.mark_needs_layout();
+                true
+            } else {
+                false // Already marked, no need to continue bubbling
+            }
+        }).unwrap_or(false) {
+            node_id = parent_id; // Continue bubbling up
+        } else {
+            break; // Parent already dirty or error - stop
+        }
+    }
 }
 
 /// Runs the measure phase for the subtree rooted at `root`.
@@ -272,8 +312,8 @@ pub fn measure_layout(
     let epoch = if needs_measure {
         NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
     } else {
-        // Reuse the previous epoch to allow cache hits
-        NEXT_CACHE_EPOCH.load(Ordering::Relaxed).saturating_sub(1).max(1)
+        // Reuse current epoch when tree is clean - don't increment
+        NEXT_CACHE_EPOCH.load(Ordering::Relaxed)
     };
 
     let original_applier = std::mem::replace(applier, MemoryApplier::new());
@@ -320,24 +360,8 @@ impl LayoutBuilder {
         LayoutBuilderState::measure_node(Rc::clone(&self.state), node_id, constraints)
     }
 
-    fn measure_node_reuse(
-        &mut self,
-        node_id: NodeId,
-        constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
-        LayoutBuilderState::measure_node(Rc::clone(&self.state), node_id, constraints)
-    }
-
     fn set_runtime_handle(&mut self, handle: Option<RuntimeHandle>) {
         self.state.borrow_mut().runtime_handle = handle;
-    }
-
-    fn set_cache_epoch(&mut self, epoch: u64) {
-        self.state.borrow_mut().cache_epoch = epoch;
-    }
-
-    fn cache_epoch(&self) -> u64 {
-        self.state.borrow().cache_epoch
     }
 }
 
@@ -1242,9 +1266,8 @@ fn measure_node_with_host(
         Some(handle) => Some(handle),
         None => applier.borrow_typed().runtime_handle(),
     };
-    let mut builder = LayoutBuilder::new(applier);
+    let mut builder = LayoutBuilder::new_with_epoch(applier, epoch);
     builder.set_runtime_handle(runtime_handle);
-    builder.set_cache_epoch(epoch);
     builder.measure_node(node_id, constraints)
 }
 

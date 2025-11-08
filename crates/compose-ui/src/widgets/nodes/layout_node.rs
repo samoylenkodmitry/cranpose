@@ -143,6 +143,10 @@ pub struct LayoutNode {
     // Dirty flags for selective measure/layout/render
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
+    // Parent tracking for dirty flag bubbling (Jetpack Compose style)
+    parent: Cell<Option<NodeId>>,
+    // Node's own ID (set by applier after creation)
+    id: Cell<Option<NodeId>>,
 }
 
 impl LayoutNode {
@@ -156,6 +160,8 @@ impl LayoutNode {
             cache: LayoutNodeCacheHandles::default(),
             needs_measure: Cell::new(true), // New nodes need initial measure
             needs_layout: Cell::new(true),  // New nodes need initial layout
+            parent: Cell::new(None),        // No parent initially
+            id: Cell::new(None),            // ID set by applier after creation
         };
         node.set_modifier(modifier);
         node
@@ -206,6 +212,31 @@ impl LayoutNode {
         self.needs_layout.set(false);
     }
 
+    /// Set this node's ID (called by applier after creation).
+    pub fn set_node_id(&self, id: NodeId) {
+        self.id.set(Some(id));
+    }
+
+    /// Get this node's ID.
+    pub fn node_id(&self) -> Option<NodeId> {
+        self.id.get()
+    }
+
+    /// Set this node's parent (called when node is added as child).
+    pub fn set_parent(&self, parent: NodeId) {
+        self.parent.set(Some(parent));
+    }
+
+    /// Clear this node's parent (called when node is removed from parent).
+    pub fn clear_parent(&self) {
+        self.parent.set(None);
+    }
+
+    /// Get this node's parent.
+    pub fn parent(&self) -> Option<NodeId> {
+        self.parent.get()
+    }
+
     pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
         self.cache.clone()
     }
@@ -222,6 +253,8 @@ impl Clone for LayoutNode {
             cache: self.cache.clone(),
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
+            parent: Cell::new(self.parent.get()),
+            id: Cell::new(self.id.get()),
         }
     }
 }
@@ -231,12 +264,15 @@ impl Node for LayoutNode {
         self.children.insert(child);
         self.cache.clear();
         self.mark_needs_measure();
+        // TODO: Parent tracking is set up at widget layer via set_parent()
+        // This is done where we have access to the applier
     }
 
     fn remove_child(&mut self, child: NodeId) {
         self.children.shift_remove(&child);
         self.cache.clear();
         self.mark_needs_measure();
+        // TODO: Clear parent via applier.with_node(child, |n| n.clear_parent())
     }
 
     fn move_child(&mut self, from: usize, to: usize) {
@@ -253,6 +289,7 @@ impl Node for LayoutNode {
         }
         self.cache.clear();
         self.mark_needs_measure();
+        // Parent doesn't change when moving within same parent
     }
 
     fn update_children(&mut self, children: &[NodeId]) {
@@ -262,6 +299,7 @@ impl Node for LayoutNode {
         }
         self.cache.clear();
         self.mark_needs_measure();
+        // TODO: Update parent links via applier for all new children
     }
 
     fn children(&self) -> Vec<NodeId> {

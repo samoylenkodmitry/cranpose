@@ -19,12 +19,12 @@ pub use compose_ui_graphics::Dp;
 pub use compose_ui_layout::IntrinsicSize;
 pub use draw::{execute_draw_commands, DrawCacheBuilder, DrawCommand};
 pub use layout::{
-    core::{
+    bubble_layout_dirty, core::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
-    },
-    measure_layout, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeKind, LayoutTree,
-    SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole, SemanticsTree,
+    }, measure_layout, tree_needs_layout, LayoutBox, LayoutEngine, LayoutMeasurements,
+    LayoutNodeKind, LayoutTree, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
+    SemanticsTree
 };
 pub use modifier::{
     Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Modifier, Point, PointerEvent,
