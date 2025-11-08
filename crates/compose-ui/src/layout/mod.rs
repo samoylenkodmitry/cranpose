@@ -238,13 +238,10 @@ impl LayoutMeasurements {
 /// Check if a node or any of its descendants needs measure (selective measure optimization).
 /// This can be used by the app shell to skip layout when the tree is clean.
 ///
-/// Since dirty flags bubble up to the root, we only need to check the root node's dirty flag.
-/// This is O(1) instead of O(tree size).
+/// Currently uses recursive check (O(tree) worst case, but early-exits on first dirty node).
+/// TODO: Could optimize to O(1) once all mutation paths guarantee bubbling to root.
 pub fn tree_needs_layout(applier: &mut MemoryApplier, root: NodeId) -> bool {
-    // Just check root's dirty flag - bubbling ensures it's set if any descendant is dirty
-    applier.with_node::<LayoutNode, _>(root, |node| {
-        node.needs_layout()
-    }).unwrap_or(true) // If root isn't a LayoutNode or doesn't exist, assume dirty
+    needs_measure_recursive(applier, root)
 }
 
 /// Internal recursive check for dirty nodes.
@@ -284,7 +281,10 @@ fn needs_measure_recursive(applier: &mut MemoryApplier, node_id: NodeId) -> bool
 
 /// Bubble layout dirty flag up the parent chain (Jetpack Compose style).
 /// When a node becomes dirty, all ancestors need to know they have dirty descendants.
-pub fn bubble_layout_dirty(applier: &mut MemoryApplier, mut node_id: NodeId) {
+///
+/// This is the applier-based version for tests and direct applier usage.
+/// Production widget code should use `widgets::bubble_dirty_flags()` which works in composer context.
+pub(crate) fn bubble_layout_dirty(applier: &mut MemoryApplier, mut node_id: NodeId) {
     loop {
         // Get parent of current node
         let parent_id = match applier.with_node::<LayoutNode, _>(node_id, |node| node.parent()) {

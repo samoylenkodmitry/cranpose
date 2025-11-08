@@ -19,7 +19,7 @@ pub use compose_ui_graphics::Dp;
 pub use compose_ui_layout::IntrinsicSize;
 pub use draw::{execute_draw_commands, DrawCacheBuilder, DrawCommand};
 pub use layout::{
-    bubble_layout_dirty, core::{
+    core::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
     }, measure_layout, tree_needs_layout, LayoutBox, LayoutEngine, LayoutMeasurements,
