@@ -116,17 +116,23 @@ impl ShapeBatchBuffers {
         }
 
         let hard_cap = (hard_max_bytes / element_size).max(1);
-        debug_assert!(
-            requested <= hard_cap,
-            "requested capacity {} exceeds hard limit {} ({} bytes)",
-            requested,
-            hard_cap,
-            hard_max_bytes
-        );
+        let capped_request = if requested > hard_cap {
+            if log::log_enabled!(log::Level::Debug) {
+                log::debug!(
+                    "requested capacity {} exceeds hard limit {} ({} bytes); clamping",
+                    requested,
+                    hard_cap,
+                    hard_max_bytes
+                );
+            }
+            hard_cap
+        } else {
+            requested
+        };
 
-        let next_pow = requested.next_power_of_two();
+        let next_pow = capped_request.next_power_of_two();
         let capped = next_pow.min(hard_cap);
-        capped.max(requested.min(hard_cap))
+        capped.max(capped_request)
     }
 
     fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
@@ -294,6 +300,37 @@ impl GpuRenderer {
             Brush::Solid(_) => 0,
             Brush::LinearGradient(colors) => colors.len(),
             Brush::RadialGradient { colors, .. } => colors.len(),
+        }
+    }
+
+    fn compute_chunk_end(shapes: &[DrawShape], start: usize) -> usize {
+        if start >= shapes.len() {
+            return start;
+        }
+
+        let mut gradient_used = 0usize;
+        let mut end = start;
+
+        while end < shapes.len() && (end - start) < MAX_SHAPES_PER_DRAW {
+            let stops = Self::estimate_gradient_stops(&shapes[end]);
+
+            if end > start && gradient_used.saturating_add(stops) > MAX_GRADIENT_STOPS_PER_DRAW {
+                break;
+            }
+
+            let remaining = MAX_GRADIENT_STOPS_PER_DRAW.saturating_sub(gradient_used);
+            gradient_used = gradient_used.saturating_add(stops.min(remaining));
+            end += 1;
+
+            if gradient_used >= MAX_GRADIENT_STOPS_PER_DRAW {
+                break;
+            }
+        }
+
+        if end == start {
+            (start + 1).min(shapes.len())
+        } else {
+            end
         }
     }
 
@@ -627,31 +664,19 @@ impl GpuRenderer {
         let mut shape_cursor = 0usize;
 
         while shape_cursor < sorted_shapes.len() {
+            let chunk_end = Self::compute_chunk_end(&sorted_shapes, shape_cursor);
+
             vertex_data.clear();
             index_data.clear();
             shape_data_entries.clear();
             gradient_data.clear();
 
-            let mut shapes_in_chunk = 0usize;
-
-            while shape_cursor < sorted_shapes.len() && shapes_in_chunk < MAX_SHAPES_PER_DRAW {
+            for (local_index, shape) in sorted_shapes[shape_cursor..chunk_end].iter().enumerate() {
                 let available_slots =
                     MAX_GRADIENT_STOPS_PER_DRAW.saturating_sub(gradient_data.len());
-
-                if available_slots == 0 && shapes_in_chunk > 0 {
-                    break;
-                }
-
-                let shape = &sorted_shapes[shape_cursor];
-                let requested_stops = Self::estimate_gradient_stops(shape);
-
-                if shapes_in_chunk > 0 && requested_stops > available_slots {
-                    break;
-                }
-
                 let metrics = Self::push_shape_into_batch(
                     shape,
-                    shapes_in_chunk,
+                    local_index,
                     available_slots,
                     &mut vertex_data,
                     &mut index_data,
@@ -659,50 +684,32 @@ impl GpuRenderer {
                     &mut gradient_data,
                 );
 
-                if metrics.truncated() && log::log_enabled!(log::Level::Debug) {
-                    log::debug!(
-                        "Truncated gradient stops from {} to {} for shape at z-index {}",
-                        metrics.requested_stops,
-                        metrics.used_stops,
-                        shape.z_index
-                    );
-                }
-
-                shapes_in_chunk += 1;
-                shape_cursor += 1;
-
-                if gradient_data.len() >= MAX_GRADIENT_STOPS_PER_DRAW {
-                    break;
+                if metrics.truncated() {
+                    if local_index == 0
+                        && available_slots == MAX_GRADIENT_STOPS_PER_DRAW
+                        && log::log_enabled!(log::Level::Warn)
+                    {
+                        log::warn!(
+                            "Gradient for shape at z-index {} required {} stops but only {} were used due to batch limits",
+                            shape.z_index,
+                            metrics.requested_stops,
+                            metrics.used_stops
+                        );
+                    } else if log::log_enabled!(log::Level::Debug) {
+                        log::debug!(
+                            "Truncated gradient stops from {} to {} for shape at z-index {}",
+                            metrics.requested_stops,
+                            metrics.used_stops,
+                            shape.z_index
+                        );
+                    }
                 }
             }
 
-            if shapes_in_chunk == 0 && shape_cursor < sorted_shapes.len() {
-                let shape = &sorted_shapes[shape_cursor];
-                let metrics = Self::push_shape_into_batch(
-                    shape,
-                    0,
-                    MAX_GRADIENT_STOPS_PER_DRAW,
-                    &mut vertex_data,
-                    &mut index_data,
-                    &mut shape_data_entries,
-                    &mut gradient_data,
-                );
+            shape_cursor = chunk_end;
 
-                if metrics.truncated() && log::log_enabled!(log::Level::Warn) {
-                    log::warn!(
-                        "Gradient for shape at z-index {} required {} stops but only {} were used due to batch limits",
-                        shape.z_index,
-                        metrics.requested_stops,
-                        metrics.used_stops
-                    );
-                }
-
-                shapes_in_chunk = 1;
-                shape_cursor += 1;
-            }
-
-            if shapes_in_chunk == 0 {
-                break;
+            if vertex_data.is_empty() {
+                continue;
             }
 
             let vertex_count = vertex_data.len();
