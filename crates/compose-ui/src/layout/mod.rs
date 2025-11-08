@@ -11,9 +11,8 @@ use std::{
 };
 
 use compose_core::{
-    Applier, ApplierHost, Composer, ConcreteApplierHost,
-    MemoryApplier, Node, NodeError, NodeId, Phase, RuntimeHandle, SlotBackend, SlotsHost,
-    SnapshotStateObserver,
+    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
+    Phase, RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
 };
 
 #[cfg(test)]
@@ -235,6 +234,32 @@ impl LayoutMeasurements {
     }
 }
 
+/// Check if a node or any of its descendants needs measure (selective measure optimization).
+/// This can be used by the app shell to skip layout when the tree is clean.
+///
+/// O(1) check - just looks at root's dirty flag.
+/// Works because all mutation paths bubble dirty flags to root via composer commands.
+///
+/// Returns Result to force caller to handle errors explicitly. No more unwrap_or(true) safety net.
+pub fn tree_needs_layout(applier: &mut dyn Applier, root: NodeId) -> Result<bool, NodeError> {
+    // Just check root - bubbling ensures it's dirty if any descendant is dirty
+    let node = applier.get_mut(root)?;
+    let layout_node =
+        node.as_any_mut()
+            .downcast_mut::<LayoutNode>()
+            .ok_or(NodeError::TypeMismatch {
+                id: root,
+                expected: std::any::type_name::<LayoutNode>(),
+            })?;
+    Ok(layout_node.needs_layout())
+}
+
+/// Test helper: bubbles layout dirty flag to root.
+#[cfg(test)]
+pub(crate) fn bubble_layout_dirty(applier: &mut MemoryApplier, node_id: NodeId) {
+    compose_core::bubble_layout_dirty(applier as &mut dyn Applier, node_id);
+}
+
 /// Runs the measure phase for the subtree rooted at `root`.
 pub fn measure_layout(
     applier: &mut MemoryApplier,
@@ -247,9 +272,24 @@ pub fn measure_layout(
         min_height: 0.0,
         max_height: max_size.height,
     };
+
+    // Selective measure: only increment epoch if something needs measuring
+    // O(1) check - just look at root's dirty flag (bubbling ensures correctness)
+    let needs_measure = {
+        let node = applier.get_mut(root)?;
+        node.needs_layout()
+    };
+
+    let epoch = if needs_measure {
+        NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
+    } else {
+        // Reuse current epoch when tree is clean - don't increment
+        NEXT_CACHE_EPOCH.load(Ordering::Relaxed)
+    };
+
     let original_applier = std::mem::replace(applier, MemoryApplier::new());
     let applier_host = Rc::new(ConcreteApplierHost::new(original_applier));
-    let mut builder = LayoutBuilder::new(Rc::clone(&applier_host));
+    let mut builder = LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), epoch);
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
     let metadata = {
         let mut applier_ref = applier_host.borrow_typed();
@@ -271,9 +311,23 @@ struct LayoutBuilder {
 }
 
 impl LayoutBuilder {
+    /// Creates a new LayoutBuilder with a fresh epoch.
+    /// This always increments the global epoch counter to ensure cache invalidation.
+    /// For selective measure optimization, use `new_with_epoch()` instead.
     fn new(applier: Rc<ConcreteApplierHost<MemoryApplier>>) -> Self {
+        let epoch = NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed);
         Self {
-            state: Rc::new(RefCell::new(LayoutBuilderState::new(applier))),
+            state: Rc::new(RefCell::new(LayoutBuilderState::new_with_epoch(
+                applier, epoch,
+            ))),
+        }
+    }
+
+    fn new_with_epoch(applier: Rc<ConcreteApplierHost<MemoryApplier>>, epoch: u64) -> Self {
+        Self {
+            state: Rc::new(RefCell::new(LayoutBuilderState::new_with_epoch(
+                applier, epoch,
+            ))),
         }
     }
 
@@ -285,24 +339,8 @@ impl LayoutBuilder {
         LayoutBuilderState::measure_node(Rc::clone(&self.state), node_id, constraints)
     }
 
-    fn measure_node_reuse(
-        &mut self,
-        node_id: NodeId,
-        constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
-        LayoutBuilderState::measure_node(Rc::clone(&self.state), node_id, constraints)
-    }
-
     fn set_runtime_handle(&mut self, handle: Option<RuntimeHandle>) {
         self.state.borrow_mut().runtime_handle = handle;
-    }
-
-    fn set_cache_epoch(&mut self, epoch: u64) {
-        self.state.borrow_mut().cache_epoch = epoch;
-    }
-
-    fn cache_epoch(&self) -> u64 {
-        self.state.borrow().cache_epoch
     }
 }
 
@@ -316,13 +354,13 @@ struct LayoutBuilderState {
 }
 
 impl LayoutBuilderState {
-    fn new(applier: Rc<ConcreteApplierHost<MemoryApplier>>) -> Self {
+    fn new_with_epoch(applier: Rc<ConcreteApplierHost<MemoryApplier>>, epoch: u64) -> Self {
         let runtime_handle = applier.borrow_typed().runtime_handle();
         Self {
             applier,
             runtime_handle,
             slots: SlotBackend::default(),
-            cache_epoch: NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed),
+            cache_epoch: epoch,
             tmp_measurables: Vec::new(),
             tmp_records: Vec::new(),
         }
@@ -529,9 +567,27 @@ impl LayoutBuilderState {
             measure_policy,
             children,
             cache,
+            needs_measure,
         } = snapshot;
         cache.activate(cache_epoch);
+
+        // Selective measure: if node doesn't need measure and we have a cached result, use it
+        if !needs_measure {
+            if let Some(cached) = cache.get_measurement(constraints) {
+                return Ok(cached);
+            }
+        }
+
+        // Otherwise check cache normally (for different constraints)
         if let Some(cached) = cache.get_measurement(constraints) {
+            // Clear dirty flag after successful measure
+            Self::with_applier_result(&state_rc, |applier| {
+                applier.with_node::<LayoutNode, _>(node_id, |node| {
+                    node.clear_needs_measure();
+                    node.clear_needs_layout();
+                })
+            })
+            .ok();
             return Ok(cached);
         }
 
@@ -730,6 +786,15 @@ impl LayoutBuilderState {
 
         cache.store_measurement(constraints, Rc::clone(&measured));
 
+        // Clear dirty flags after successful measure
+        Self::with_applier_result(&state_rc, |applier| {
+            applier.with_node::<LayoutNode, _>(node_id, |node| {
+                node.clear_needs_measure();
+                node.clear_needs_layout();
+            })
+        })
+        .ok();
+
         Ok(measured)
     }
 
@@ -753,11 +818,19 @@ impl LayoutBuilderState {
     }
 }
 
+/// Snapshot of a LayoutNode's data for measuring.
+/// This is a temporary copy used during the measure phase, not a live node.
+///
+/// Note: We capture `needs_measure` here because it's checked during measure to enable
+/// selective measure optimization at the individual node level. Even if the tree is partially
+/// dirty (some nodes changed), clean nodes can skip measure and use cached results.
 struct LayoutNodeSnapshot {
     modifier: Modifier,
     measure_policy: Rc<dyn MeasurePolicy>,
     children: Vec<NodeId>,
     cache: LayoutNodeCacheHandles,
+    /// Whether this specific node needs to be measured (vs using cached measurement)
+    needs_measure: bool,
 }
 
 impl LayoutNodeSnapshot {
@@ -767,6 +840,7 @@ impl LayoutNodeSnapshot {
             measure_policy: Rc::clone(&node.measure_policy),
             children: node.children.iter().copied().collect(),
             cache: node.cache_handles(),
+            needs_measure: node.needs_measure(),
         }
     }
 }
@@ -1168,9 +1242,8 @@ fn measure_node_with_host(
         Some(handle) => Some(handle),
         None => applier.borrow_typed().runtime_handle(),
     };
-    let mut builder = LayoutBuilder::new(applier);
+    let mut builder = LayoutBuilder::new_with_epoch(applier, epoch);
     builder.set_runtime_handle(runtime_handle);
-    builder.set_cache_epoch(epoch);
     builder.measure_node(node_id, constraints)
 }
 

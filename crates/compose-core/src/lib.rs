@@ -46,6 +46,7 @@ pub use runtime::{TestRuntime, TestScheduler};
 
 use crate::collections::map::HashMap;
 use crate::collections::map::HashSet;
+use crate::state::{NeverEqual, SnapshotMutableState, UpdateScope};
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::fmt;
@@ -55,7 +56,6 @@ use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak}; // FUTURE(no_std): replace Rc/Weak with arena-managed handles.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use crate::state::{NeverEqual, SnapshotMutableState, UpdateScope};
 
 pub type Key = u64;
 pub type NodeId = usize;
@@ -740,10 +740,9 @@ pub use slot_storage::{GroupId, SlotStorage, StartGroup, ValueSlotId};
 
 pub mod chunked_slot_storage;
 pub mod hierarchical_slot_storage;
-pub mod split_slot_storage;
 pub mod slot_backend;
+pub mod split_slot_storage;
 pub use slot_backend::{make_backend, SlotBackend, SlotBackendKind};
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SlotTable: gap-buffer-based implementation
@@ -751,7 +750,6 @@ pub use slot_backend::{make_backend, SlotBackend, SlotBackendKind};
 
 pub mod slot_table;
 pub use slot_table::SlotTable;
-
 
 pub trait Node: Any {
     fn mount(&mut self) {}
@@ -763,6 +761,146 @@ pub trait Node: Any {
     fn update_children(&mut self, _children: &[NodeId]) {}
     fn children(&self) -> Vec<NodeId> {
         Vec::new()
+    }
+    /// Called after the node is created to record its own ID.
+    /// Useful for nodes that need to store their ID for later operations.
+    fn set_node_id(&mut self, _id: NodeId) {}
+    /// Called when this node is attached to a parent.
+    /// Nodes with parent tracking should set their parent reference here.
+    fn on_attached_to_parent(&mut self, _parent: NodeId) {}
+    /// Called when this node is removed from its parent.
+    /// Nodes with parent tracking should clear their parent reference here.
+    fn on_removed_from_parent(&mut self) {}
+    /// Get this node's parent ID (for nodes that track parents).
+    /// Returns None if node has no parent or doesn't track parents.
+    fn parent(&self) -> Option<NodeId> {
+        None
+    }
+    /// Mark this node as needing layout (for nodes with dirty flags).
+    /// Called during bubbling to propagate dirtiness up the tree.
+    fn mark_needs_layout(&self) {}
+    /// Check if this node needs layout (for nodes with dirty flags).
+    fn needs_layout(&self) -> bool {
+        false
+    }
+}
+
+/// Unified API for bubbling layout dirty flags from a node to the root (Applier context).
+///
+/// This is the canonical function for dirty bubbling during the apply phase (structural changes).
+/// Call this after mutations like insert/remove/move that happen during apply.
+///
+/// # Behavior
+/// 1. Marks the starting node as needing layout
+/// 2. Walks up the parent chain, marking each ancestor
+/// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
+/// 4. Stops at the root (node with no parent)
+///
+/// # Performance
+/// This function is O(height) in the worst case, but typically O(1) due to early exit
+/// when encountering an already-dirty ancestor.
+///
+/// # Usage
+/// - Call from composer mutations (insert/remove/move) during apply phase
+/// - Call from applier-level operations that modify the tree structure
+pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
+    bubble_layout_dirty_applier(applier, node_id);
+}
+
+/// Unified API for bubbling layout dirty flags from a node to the root (Composer context).
+///
+/// This is the canonical function for dirty bubbling during composition (property changes).
+/// Call this after property changes that happen during composition via with_node_mut.
+///
+/// # Behavior
+/// 1. Marks the starting node as needing layout
+/// 2. Walks up the parent chain, marking each ancestor
+/// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
+/// 4. Stops at the root (node with no parent)
+///
+/// # Performance
+/// This function is O(height) in the worst case, but typically O(1) due to early exit
+/// when encountering an already-dirty ancestor.
+///
+/// # Type Requirements
+/// The node type N must implement Node (which includes mark_needs_layout, parent, etc.).
+/// Typically this will be LayoutNode or similar layout-aware node types.
+///
+/// # Usage
+/// - Call from property setters during composition (e.g., set_modifier, set_measure_policy)
+/// - Call from widget composition when layout-affecting state changes
+pub fn bubble_layout_dirty_in_composer<N: Node + 'static>(node_id: NodeId) {
+    bubble_layout_dirty_composer::<N>(node_id);
+}
+
+/// Internal implementation for applier-based bubbling.
+fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
+    // First, mark the starting node dirty (critical!)
+    // This ensures root gets marked even if it has no parent
+    if let Ok(node) = applier.get_mut(node_id) {
+        node.mark_needs_layout();
+    }
+
+    // Then bubble up to ancestors
+    loop {
+        // Get parent of current node
+        let parent_id = match applier.get_mut(node_id) {
+            Ok(node) => node.parent(),
+            Err(_) => None,
+        };
+
+        match parent_id {
+            Some(pid) => {
+                // Mark parent as needing layout
+                if let Ok(parent) = applier.get_mut(pid) {
+                    if !parent.needs_layout() {
+                        parent.mark_needs_layout();
+                        node_id = pid; // Continue bubbling
+                    } else {
+                        break; // Already dirty, stop
+                    }
+                } else {
+                    break;
+                }
+            }
+            None => break, // No parent, stop
+        }
+    }
+}
+
+/// Internal implementation for composer-based bubbling.
+/// This uses with_node_mut and works during composition with a concrete node type.
+/// The node type N must implement Node (which includes mark_needs_layout, parent, etc.).
+fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
+    // Mark the starting node dirty
+    let _ = with_node_mut(node_id, |node: &mut N| {
+        node.mark_needs_layout();
+    });
+
+    // Then bubble up to ancestors
+    loop {
+        // Get parent of current node
+        let parent_id = match with_node_mut(node_id, |node: &mut N| node.parent()) {
+            Ok(Some(pid)) => pid,
+            _ => break, // No parent or error - stop bubbling
+        };
+
+        // Mark parent as needing layout
+        let should_continue = with_node_mut(parent_id, |node: &mut N| {
+            if !node.needs_layout() {
+                node.mark_needs_layout();
+                true // Continue bubbling
+            } else {
+                false // Already dirty, stop (O(1) optimization)
+            }
+        })
+        .unwrap_or(false);
+
+        if should_continue {
+            node_id = parent_id;
+        } else {
+            break;
+        }
     }
 }
 
@@ -1135,7 +1273,10 @@ impl Composer {
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
         let (group, scope_ref, restored_from_gap) = {
             let mut slots = self.slots_mut();
-            let StartGroup { group, restored_from_gap } = slots.begin_group(key);
+            let StartGroup {
+                group,
+                restored_from_gap,
+            } = slots.begin_group(key);
             let scope_ref = slots
                 .remember(|| RecomposeScope::new(self.runtime_handle()))
                 .with(|scope| scope.clone());
@@ -1640,6 +1781,7 @@ impl Composer {
                     Err(NodeError::Missing { .. }) => return Ok(()),
                     Err(err) => return Err(err),
                 };
+                node.set_node_id(id);
                 node.mount();
                 Ok(())
             }));
@@ -1713,7 +1855,8 @@ impl Composer {
                 eprintln!("  previous children: {:?}", previous);
                 eprintln!("  new children: {:?}", new_children);
             }
-            if previous != new_children {
+            let children_changed = previous != new_children;
+            if children_changed {
                 let mut current = previous.clone();
                 let target = new_children.clone();
                 let desired: HashSet<NodeId> = target.iter().copied().collect();
@@ -1724,14 +1867,15 @@ impl Composer {
                         current.remove(index);
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
+                                // Remove child from parent and clear parent link atomically
                                 if let Ok(parent_node) = applier.get_mut(id) {
                                     parent_node.remove_child(child);
                                 }
-                                Ok(())
-                            }));
-                        self.commands_mut()
-                            .push(Box::new(move |applier: &mut dyn Applier| {
+                                // Bubble BEFORE clearing parent link so bubbling can verify consistency
+                                bubble_layout_dirty(applier, id);
+                                // Now clear parent link and unmount
                                 if let Ok(node) = applier.get_mut(child) {
+                                    node.on_removed_from_parent();
                                     node.unmount();
                                 }
                                 let _ = applier.remove(child);
@@ -1754,6 +1898,13 @@ impl Composer {
                                     }
                                     Ok(())
                                 }));
+                            self.commands_mut()
+                                .push(Box::new(move |applier: &mut dyn Applier| {
+                                    // Bubble dirty flags to root after reordering
+                                    // Even though parent doesn't change, layout needs recomputation
+                                    bubble_layout_dirty(applier, id);
+                                    Ok(())
+                                }));
                         }
                     } else {
                         let insert_index = target_index.min(current.len());
@@ -1761,9 +1912,16 @@ impl Composer {
                         current.insert(insert_index, child);
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
+                                // Insert child and set parent link atomically
                                 if let Ok(parent_node) = applier.get_mut(id) {
                                     parent_node.insert_child(child);
                                 }
+                                // Set parent link immediately after insertion
+                                if let Ok(child_node) = applier.get_mut(child) {
+                                    child_node.on_attached_to_parent(id);
+                                }
+                                // Bubble dirty flags to root after insertion
+                                bubble_layout_dirty(applier, id);
                                 Ok(())
                             }));
                         if insert_index != appended_index {
@@ -1778,6 +1936,26 @@ impl Composer {
                     }
                 }
             }
+
+            // Even if children didn't change, property changes (like set_modifier, set_measure_policy)
+            // may have marked this node dirty during composition. We need to bubble those changes too.
+            // This makes composable-level bubbling unnecessary.
+            if !children_changed {
+                self.commands_mut()
+                    .push(Box::new(move |applier: &mut dyn Applier| {
+                        // Check if node is dirty and bubble if so
+                        let is_dirty = if let Ok(node) = applier.get_mut(id) {
+                            node.needs_layout()
+                        } else {
+                            false
+                        };
+                        if is_dirty {
+                            bubble_layout_dirty(applier, id);
+                        }
+                        Ok(())
+                    }));
+            }
+
             remembered.update(|entry| entry.children = new_children);
         }
     }
