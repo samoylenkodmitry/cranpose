@@ -23,6 +23,8 @@
 
 use crate::layout::{LayoutBox, LayoutTree};
 use crate::renderer::{RecordedRenderScene, RenderOp};
+use compose_foundation::{ModifierNodeChain, NodeCapabilities};
+use std::any::type_name_of_val;
 use std::fmt::Write;
 
 /// Logs the current layout tree to stdout with indentation showing hierarchy
@@ -168,6 +170,26 @@ fn count_nodes(layout_box: &LayoutBox) -> usize {
         .iter()
         .map(|child| count_nodes(child))
         .sum::<usize>()
+}
+
+/// Logs the contents of a modifier node chain including capabilities.
+pub fn log_modifier_chain(chain: &ModifierNodeChain) {
+    println!("\n=== MODIFIER CHAIN ===");
+    println!("Total nodes: {}", chain.len());
+    println!("Aggregated capabilities: {:?}", chain.capabilities());
+    chain.visit_nodes(|node, capabilities| {
+        let type_name = type_name_of_val(node);
+        println!(
+            " - {} [layout={}, draw={}, pointer={}, semantics={}, locals={}]",
+            type_name,
+            capabilities.contains(NodeCapabilities::LAYOUT),
+            capabilities.contains(NodeCapabilities::DRAW),
+            capabilities.contains(NodeCapabilities::POINTER_INPUT),
+            capabilities.contains(NodeCapabilities::SEMANTICS),
+            capabilities.contains(NodeCapabilities::MODIFIER_LOCALS),
+        );
+    });
+    println!("=== END MODIFIER CHAIN ===\n");
 }
 
 #[cfg(test)]

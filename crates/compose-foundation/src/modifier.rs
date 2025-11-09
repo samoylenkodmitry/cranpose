@@ -8,12 +8,11 @@
 //! begin migrating without expanding the public API surface.
 
 use std::any::{type_name, Any, TypeId};
-use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{BitOr, BitOrAssign};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::slice::{Iter, IterMut};
 
 pub use compose_ui_graphics::DrawScope;
@@ -138,6 +137,16 @@ pub trait ModifierNode: Any {
     fn as_pointer_input_node_mut(&mut self) -> Option<&mut dyn PointerInputNode> {
         None
     }
+
+    /// Returns this node as a semantics modifier if it implements the trait.
+    fn as_semantics_node(&self) -> Option<&dyn SemanticsNode> {
+        None
+    }
+
+    /// Returns this node as a mutable semantics modifier if it implements the trait.
+    fn as_semantics_node_mut(&mut self) -> Option<&mut dyn SemanticsNode> {
+        None
+    }
 }
 
 /// Marker trait for layout-specific modifier nodes.
@@ -247,6 +256,16 @@ pub struct SemanticsConfiguration {
     pub is_clickable: bool,
 }
 
+impl SemanticsConfiguration {
+    pub fn merge(&mut self, other: &SemanticsConfiguration) {
+        if let Some(description) = &other.content_description {
+            self.content_description = Some(description.clone());
+        }
+        self.is_button |= other.is_button;
+        self.is_clickable |= other.is_clickable;
+    }
+}
+
 impl fmt::Debug for dyn ModifierNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModifierNode").finish_non_exhaustive()
@@ -258,7 +277,7 @@ impl dyn ModifierNode {
         self
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
+    pub fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
@@ -502,6 +521,28 @@ pub fn modifier_element<E: ModifierNodeElement>(element: E) -> DynModifierElemen
 /// Boxed type-erased modifier element.
 pub type DynModifierElement = Rc<dyn AnyModifierElement>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChainPosition {
+    Head,
+    Tail,
+    Entry(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NodeLinks {
+    parent: ChainPosition,
+    child: ChainPosition,
+}
+
+impl Default for NodeLinks {
+    fn default() -> Self {
+        Self {
+            parent: ChainPosition::Head,
+            child: ChainPosition::Tail,
+        }
+    }
+}
+
 struct ModifierNodeEntry {
     element_type: TypeId,
     key: Option<u64>,
@@ -510,6 +551,8 @@ struct ModifierNodeEntry {
     node: Box<dyn ModifierNode>,
     attached: bool,
     capabilities: NodeCapabilities,
+    links: NodeLinks,
+    aggregate_child_capabilities: NodeCapabilities,
 }
 
 impl ModifierNodeEntry {
@@ -529,6 +572,8 @@ impl ModifierNodeEntry {
             node,
             attached: false,
             capabilities,
+            links: NodeLinks::default(),
+            aggregate_child_capabilities: NodeCapabilities::empty(),
         }
     }
 
@@ -563,6 +608,13 @@ impl ModifierNodeEntry {
 pub struct ModifierNodeChain {
     entries: Vec<Box<ModifierNodeEntry>>,
     aggregated_capabilities: NodeCapabilities,
+    head_aggregate_child_capabilities: NodeCapabilities,
+}
+
+#[derive(Clone, Copy)]
+pub struct ModifierChainNodeRef<'a> {
+    chain: &'a ModifierNodeChain,
+    position: ChainPosition,
 }
 
 impl Default for ModifierNodeChain {
@@ -576,6 +628,7 @@ impl ModifierNodeChain {
         Self {
             entries: Vec::new(),
             aggregated_capabilities: NodeCapabilities::empty(),
+            head_aggregate_child_capabilities: NodeCapabilities::empty(),
         }
     }
 
@@ -672,6 +725,7 @@ impl ModifierNodeChain {
 
         self.entries = new_entries;
         self.aggregated_capabilities = aggregated;
+        self.sync_chain_links();
     }
 
     /// Convenience wrapper that accepts any iterator of type-erased
@@ -702,6 +756,7 @@ impl ModifierNodeChain {
             }
         }
         self.aggregated_capabilities = NodeCapabilities::empty();
+        self.head_aggregate_child_capabilities = NodeCapabilities::empty();
     }
 
     pub fn len(&self) -> usize {
@@ -720,6 +775,16 @@ impl ModifierNodeChain {
     /// Returns true if the chain contains at least one node with the requested capability.
     pub fn has_capability(&self, capability: NodeCapabilities) -> bool {
         self.aggregated_capabilities.contains(capability)
+    }
+
+    /// Returns the sentinel head reference for traversal.
+    pub fn head(&self) -> ModifierChainNodeRef<'_> {
+        self.make_node_ref(ChainPosition::Head)
+    }
+
+    /// Returns the sentinel tail reference for traversal.
+    pub fn tail(&self) -> ModifierChainNodeRef<'_> {
+        self.make_node_ref(ChainPosition::Tail)
     }
 
     /// Downcasts the node at `index` to the requested type.
@@ -776,6 +841,78 @@ impl ModifierNodeChain {
             .iter()
             .filter(|entry| entry.capabilities.contains(NodeCapabilities::SEMANTICS))
             .map(|entry| entry.node.as_ref())
+    }
+
+    /// Visits every node in insertion order together with its capability mask.
+    pub fn visit_nodes<F>(&self, mut f: F)
+    where
+        F: FnMut(&dyn ModifierNode, NodeCapabilities),
+    {
+        for entry in &self.entries {
+            f(entry.node.as_ref(), entry.capabilities);
+        }
+    }
+
+    /// Visits every node mutably in insertion order together with its capability mask.
+    pub fn visit_nodes_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut dyn ModifierNode, NodeCapabilities),
+    {
+        for entry in &mut self.entries {
+            f(entry.node.as_mut(), entry.capabilities);
+        }
+    }
+
+    fn make_node_ref(&self, position: ChainPosition) -> ModifierChainNodeRef<'_> {
+        ModifierChainNodeRef {
+            chain: self,
+            position,
+        }
+    }
+
+    fn head_child_position(&self) -> ChainPosition {
+        if self.entries.is_empty() {
+            ChainPosition::Tail
+        } else {
+            ChainPosition::Entry(0)
+        }
+    }
+
+    fn tail_parent_position(&self) -> ChainPosition {
+        if self.entries.is_empty() {
+            ChainPosition::Head
+        } else {
+            ChainPosition::Entry(self.entries.len() - 1)
+        }
+    }
+
+    fn sync_chain_links(&mut self) {
+        let len = self.entries.len();
+        if len == 0 {
+            self.head_aggregate_child_capabilities = NodeCapabilities::empty();
+            return;
+        }
+
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            let parent = if index == 0 {
+                ChainPosition::Head
+            } else {
+                ChainPosition::Entry(index - 1)
+            };
+            let child = if index + 1 == len {
+                ChainPosition::Tail
+            } else {
+                ChainPosition::Entry(index + 1)
+            };
+            entry.links = NodeLinks { parent, child };
+        }
+
+        let mut aggregate = NodeCapabilities::empty();
+        for entry in self.entries.iter_mut().rev() {
+            aggregate |= entry.capabilities;
+            entry.aggregate_child_capabilities = aggregate;
+        }
+        self.head_aggregate_child_capabilities = aggregate;
     }
 }
 
@@ -872,6 +1009,74 @@ impl<'a> Iterator for PointerInputNodesMut<'a> {
             }
         }
         None
+    }
+}
+
+impl<'a> ModifierChainNodeRef<'a> {
+    /// Returns the underlying modifier node when this reference targets a real entry.
+    pub fn node(self) -> Option<&'a dyn ModifierNode> {
+        match self.position {
+            ChainPosition::Entry(index) => Some(self.chain.entries[index].node.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Returns the parent reference, including sentinel head when applicable.
+    pub fn parent(self) -> Option<Self> {
+        match self.position {
+            ChainPosition::Head => None,
+            ChainPosition::Tail => {
+                Some(self.chain.make_node_ref(self.chain.tail_parent_position()))
+            }
+            ChainPosition::Entry(index) => Some(
+                self.chain
+                    .make_node_ref(self.chain.entries[index].links.parent),
+            ),
+        }
+    }
+
+    /// Returns the child reference, including sentinel tail for the last entry.
+    pub fn child(self) -> Option<Self> {
+        match self.position {
+            ChainPosition::Tail => None,
+            ChainPosition::Head => Some(self.chain.make_node_ref(self.chain.head_child_position())),
+            ChainPosition::Entry(index) => Some(
+                self.chain
+                    .make_node_ref(self.chain.entries[index].links.child),
+            ),
+        }
+    }
+
+    /// Returns the capability mask for this specific node.
+    pub fn kind_set(self) -> NodeCapabilities {
+        match self.position {
+            ChainPosition::Entry(index) => self.chain.entries[index].capabilities,
+            _ => NodeCapabilities::empty(),
+        }
+    }
+
+    /// Returns the aggregated capability mask for the subtree rooted at this node.
+    pub fn aggregate_child_capabilities(self) -> NodeCapabilities {
+        match self.position {
+            ChainPosition::Head => self.chain.head_aggregate_child_capabilities,
+            ChainPosition::Entry(index) => self.chain.entries[index].aggregate_child_capabilities,
+            ChainPosition::Tail => NodeCapabilities::empty(),
+        }
+    }
+
+    /// Returns true if this reference targets the sentinel head.
+    pub fn is_head(self) -> bool {
+        matches!(self.position, ChainPosition::Head)
+    }
+
+    /// Returns true if this reference targets the sentinel tail.
+    pub fn is_tail(self) -> bool {
+        matches!(self.position, ChainPosition::Tail)
+    }
+
+    /// Returns true if this reference targets either sentinel.
+    pub fn is_sentinel(self) -> bool {
+        self.is_head() || self.is_tail()
     }
 }
 

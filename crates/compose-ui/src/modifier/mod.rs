@@ -14,8 +14,10 @@ mod chain;
 mod clickable;
 mod draw_cache;
 mod graphics_layer;
+mod local;
 mod padding;
 mod pointer_input;
+mod semantics;
 mod slices;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
@@ -24,16 +26,21 @@ pub use chain::ModifierChainHandle;
 use compose_foundation::ModifierNodeElement;
 pub use compose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, PointerEvent, PointerEventKind,
+    SemanticsConfiguration,
 };
 pub use compose_ui_graphics::{
     Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
 };
 use compose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]
+pub use local::{modifier_local_of, ModifierLocalKey, ModifierLocalReadScope};
+#[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use slices::{collect_modifier_slices, collect_slices_from_modifier, ModifierNodeSlices};
 
 use crate::modifier_nodes::{ClipToBoundsElement, SizeElement};
+use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
+use semantics::SemanticsElement;
 
 /// Trait mirroring Jetpack Compose's `Modifier` interface.
 ///
@@ -397,6 +404,37 @@ impl Modifier {
         )
     }
 
+    pub fn modifier_local_provider<T, F>(self, key: ModifierLocalKey<T>, value: F) -> Self
+    where
+        T: 'static,
+        F: Fn() -> T + 'static,
+    {
+        let element = ModifierLocalProviderElement::new(key, value);
+        let modifier =
+            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        self.then(modifier)
+    }
+
+    pub fn modifier_local_consumer<F>(self, consumer: F) -> Self
+    where
+        F: for<'scope> Fn(&mut ModifierLocalReadScope<'scope>) + 'static,
+    {
+        let element = ModifierLocalConsumerElement::new(consumer);
+        let modifier =
+            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        self.then(modifier)
+    }
+
+    pub fn semantics<F>(self, recorder: F) -> Self
+    where
+        F: Fn(&mut SemanticsConfiguration) + 'static,
+    {
+        let element = SemanticsElement::new(recorder);
+        let modifier =
+            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        self.then(modifier)
+    }
+
     pub fn then(&self, next: Modifier) -> Modifier {
         if self.is_trivially_empty() {
             return next;
@@ -595,12 +633,34 @@ impl PartialEq for Modifier {
 
 impl Eq for Modifier {}
 
+impl fmt::Display for Modifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.elements.is_empty() {
+            return write!(f, "Modifier.empty");
+        }
+        write!(f, "Modifier[")?;
+        for (index, element) in self.elements.iter().enumerate() {
+            if index > 0 {
+                write!(f, ", ")?;
+            }
+            let name = element.inspector_name();
+            let mut properties = Vec::new();
+            element.record_inspector_properties(&mut |prop, value| {
+                properties.push(format!("{prop}={value}"));
+            });
+            if properties.is_empty() {
+                write!(f, "{name}")?;
+            } else {
+                write!(f, "{name}({})", properties.join(", "))?;
+            }
+        }
+        write!(f, "]")
+    }
+}
+
 impl fmt::Debug for Modifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Modifier")
-            .field("elements", &self.elements.len())
-            .field("inspector_entries", &self.inspector.len())
-            .finish()
+        fmt::Display::fmt(self, f)
     }
 }
 

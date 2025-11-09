@@ -611,3 +611,98 @@ fn chain_tracks_node_capabilities() {
     assert_eq!(chain.pointer_input_nodes().count(), 0);
     assert_eq!(chain.semantics_nodes().count(), 0);
 }
+
+#[test]
+fn sentinel_links_follow_chain_order() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    let head = chain.head();
+    assert!(head.is_head());
+    let first = head.child().expect("head should link to first node");
+    assert!(!first.is_sentinel());
+    assert!(first.parent().unwrap().is_head());
+    assert!(
+        first
+            .node()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TestLayoutNode>()
+            .is_some(),
+        "first node should be layout"
+    );
+
+    let second = first.child().expect("first should link to draw node");
+    assert!(
+        second
+            .node()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TestDrawNode>()
+            .is_some(),
+        "second node should be draw"
+    );
+    assert!(second.child().unwrap().is_tail());
+
+    let tail = chain.tail();
+    assert!(tail.is_tail());
+    let tail_parent = tail.parent().expect("tail should have parent");
+    assert!(
+        tail_parent
+            .node()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TestDrawNode>()
+            .is_some(),
+        "tail parent should be the draw node"
+    );
+    assert!(tail.child().is_none());
+}
+
+#[test]
+fn aggregated_child_capabilities_match_descendants() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    let expected = NodeCapabilities::LAYOUT | NodeCapabilities::DRAW;
+    assert_eq!(chain.head().aggregate_child_capabilities(), expected);
+
+    let first = chain.head().child().unwrap();
+    assert_eq!(
+        first.aggregate_child_capabilities(),
+        NodeCapabilities::LAYOUT | NodeCapabilities::DRAW
+    );
+
+    let second = first.child().unwrap();
+    assert_eq!(
+        second.aggregate_child_capabilities(),
+        NodeCapabilities::DRAW
+    );
+
+    assert_eq!(
+        chain.tail().aggregate_child_capabilities(),
+        NodeCapabilities::empty()
+    );
+}
+
+#[test]
+fn sentinel_links_exist_for_empty_chain() {
+    let chain = ModifierNodeChain::new();
+    let head_child = chain.head().child().expect("head should link to tail");
+    assert!(head_child.is_tail());
+    assert!(chain.tail().parent().unwrap().is_head());
+    assert_eq!(
+        chain.head().aggregate_child_capabilities(),
+        NodeCapabilities::empty()
+    );
+}

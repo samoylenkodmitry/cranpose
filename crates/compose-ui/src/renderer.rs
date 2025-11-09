@@ -1,7 +1,5 @@
 use crate::layout::{LayoutBox, LayoutNodeData, LayoutNodeKind, LayoutTree};
-use crate::modifier::{
-    Brush, DrawCommand as ModifierDrawCommand, Rect, ResolvedModifiers, RoundedCornerShape, Size,
-};
+use crate::modifier::{Brush, DrawCommand as ModifierDrawCommand, Rect, RoundedCornerShape, Size};
 use compose_core::NodeId;
 use compose_ui_graphics::DrawPrimitive;
 

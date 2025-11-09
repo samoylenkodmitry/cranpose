@@ -2,7 +2,7 @@ use compose_foundation::{
     BasicModifierNodeContext, InvalidationKind, ModifierNode, ModifierNodeChain, NodeCapabilities,
 };
 
-use super::{Color, Modifier, ResolvedModifiers, RoundedCornerShape};
+use super::{local::ModifierLocalManager, Modifier, ResolvedModifiers};
 use crate::modifier_nodes::{BackgroundNode, CornerShapeNode, PaddingNode};
 
 /// Runtime helper that keeps a [`ModifierNodeChain`] in sync with a [`Modifier`].
@@ -17,6 +17,7 @@ pub struct ModifierChainHandle {
     context: BasicModifierNodeContext,
     resolved: ResolvedModifiers,
     capabilities: NodeCapabilities,
+    modifier_locals: ModifierLocalManager,
 }
 
 #[allow(dead_code)]
@@ -30,6 +31,10 @@ impl ModifierChainHandle {
         self.chain
             .update_from_slice(modifier.elements(), &mut self.context);
         self.capabilities = self.chain.capabilities();
+        self.modifier_locals.sync(&mut self.chain);
+        if std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some() {
+            crate::debug::log_modifier_chain(self.chain());
+        }
         self.resolved = self.compute_resolved(modifier);
     }
 
@@ -112,6 +117,7 @@ mod tests {
     use compose_foundation::{ModifierNode, NodeCapabilities};
 
     use super::*;
+    use crate::modifier::{Color, RoundedCornerShape};
     use crate::modifier_nodes::PaddingNode;
 
     #[test]

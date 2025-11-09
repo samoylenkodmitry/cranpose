@@ -6,7 +6,9 @@ use crate::{
     },
 };
 use compose_core::{Node, NodeId};
-use compose_foundation::{DrawModifierNode, InvalidationKind, NodeCapabilities, PointerInputNode};
+use compose_foundation::{
+    DrawModifierNode, InvalidationKind, NodeCapabilities, PointerInputNode, SemanticsConfiguration,
+};
 use compose_ui_layout::{Constraints, MeasurePolicy};
 use indexmap::IndexSet;
 use std::cell::Cell;
@@ -322,6 +324,25 @@ impl LayoutNode {
     pub fn modifier_slices_snapshot(&self) -> ModifierNodeSlices {
         collect_modifier_slices(self.modifier_chain.chain())
     }
+
+    pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
+        if !self.has_semantics_modifier_nodes() {
+            return None;
+        }
+        let mut config = SemanticsConfiguration::default();
+        let mut has_semantics = false;
+        for node in self.modifier_chain.chain().semantics_nodes() {
+            if let Some(sem_node) = node.as_semantics_node() {
+                has_semantics = true;
+                sem_node.merge_semantics(&mut config);
+            }
+        }
+        if has_semantics {
+            Some(config)
+        } else {
+            None
+        }
+    }
 }
 
 /// Legacy bubbling function kept for test compatibility only.
@@ -478,6 +499,21 @@ mod tests {
 
         assert!(!node.needs_measure());
         assert!(!node.needs_layout());
+    }
+
+    #[test]
+    fn semantics_configuration_reflects_modifier_state() {
+        let mut node = fresh_node();
+        node.set_modifier(Modifier::empty().semantics(|config| {
+            config.content_description = Some("greeting".into());
+            config.is_clickable = true;
+        }));
+
+        let config = node
+            .semantics_configuration()
+            .expect("expected semantics configuration");
+        assert_eq!(config.content_description.as_deref(), Some("greeting"));
+        assert!(config.is_clickable);
     }
 
     #[test]

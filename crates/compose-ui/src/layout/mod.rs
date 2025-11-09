@@ -26,6 +26,7 @@ use crate::subcompose_layout::SubcomposeLayoutNode;
 use crate::widgets::nodes::{
     ButtonNode, IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, SpacerNode, TextNode,
 };
+use compose_foundation::SemanticsConfiguration;
 use compose_ui_layout::{Constraints, MeasurePolicy};
 
 static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
@@ -70,6 +71,7 @@ pub struct SemanticsNode {
     pub role: SemanticsRole,
     pub actions: Vec<SemanticsAction>,
     pub children: Vec<SemanticsNode>,
+    pub description: Option<String>,
 }
 
 impl SemanticsNode {
@@ -78,12 +80,14 @@ impl SemanticsNode {
         role: SemanticsRole,
         actions: Vec<SemanticsAction>,
         children: Vec<SemanticsNode>,
+        description: Option<String>,
     ) -> Self {
         Self {
             node_id,
             role,
             actions,
             children,
+            description,
         }
     }
 }
@@ -1336,6 +1340,7 @@ struct RuntimeNodeMetadata {
     modifier_slices: ModifierNodeSlices,
     role: SemanticsRole,
     actions: Vec<SemanticsAction>,
+    semantics: Option<SemanticsConfiguration>,
     button_handler: Option<Rc<RefCell<dyn FnMut()>>>,
 }
 
@@ -1347,6 +1352,7 @@ impl Default for RuntimeNodeMetadata {
             modifier_slices: ModifierNodeSlices::default(),
             role: SemanticsRole::Unknown,
             actions: Vec::new(),
+            semantics: None,
             button_handler: None,
         }
     }
@@ -1387,6 +1393,7 @@ fn runtime_metadata_for(
             modifier_slices: layout.modifier_slices_snapshot(),
             role: SemanticsRole::Layout,
             actions: Vec::new(),
+            semantics: layout.semantics_configuration(),
             button_handler: None,
         });
     }
@@ -1395,10 +1402,14 @@ fn runtime_metadata_for(
             modifier: button.modifier.clone(),
             resolved_modifiers: button.modifier.resolved_modifiers(),
             modifier_slices: collect_slices_from_modifier(&button.modifier),
-            role: SemanticsRole::Button,
-            actions: vec![SemanticsAction::Click {
-                handler: SemanticsCallback::new(node_id),
-            }],
+            role: SemanticsRole::Unknown,
+            actions: Vec::new(),
+            semantics: {
+                let mut config = SemanticsConfiguration::default();
+                config.is_button = true;
+                config.is_clickable = true;
+                Some(config)
+            },
             button_handler: Some(button.on_click.clone()),
         });
     }
@@ -1411,6 +1422,7 @@ fn runtime_metadata_for(
                 value: text.text.clone(),
             },
             actions: Vec::new(),
+            semantics: None,
             button_handler: None,
         });
     }
@@ -1421,6 +1433,7 @@ fn runtime_metadata_for(
             modifier_slices: ModifierNodeSlices::default(),
             role: SemanticsRole::Spacer,
             actions: Vec::new(),
+            semantics: None,
             button_handler: None,
         });
     }
@@ -1436,6 +1449,7 @@ fn runtime_metadata_for(
             modifier_slices,
             role: SemanticsRole::Subcompose,
             actions: Vec::new(),
+            semantics: None,
             button_handler: None,
         });
     }
@@ -1447,12 +1461,34 @@ fn build_semantics_node(
     metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
 ) -> SemanticsNode {
     let info = metadata.get(&node.node_id).cloned().unwrap_or_default();
+    let mut role = info.role;
+    let mut actions = info.actions;
+    let mut description = None;
+
+    if let Some(config) = info.semantics {
+        if config.is_button {
+            role = SemanticsRole::Button;
+        }
+        if config.is_clickable
+            && !actions
+                .iter()
+                .any(|action| matches!(action, SemanticsAction::Click { .. }))
+        {
+            actions.push(SemanticsAction::Click {
+                handler: SemanticsCallback::new(node.node_id),
+            });
+        }
+        if let Some(desc) = config.content_description {
+            description = Some(desc);
+        }
+    }
+
     let children = node
         .children
         .iter()
         .map(|child| build_semantics_node(&child.node, metadata))
         .collect();
-    SemanticsNode::new(node.node_id, info.role, info.actions, children)
+    SemanticsNode::new(node.node_id, role, actions, children, description)
 }
 
 fn build_layout_tree_from_metadata(

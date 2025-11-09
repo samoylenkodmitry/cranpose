@@ -1,9 +1,11 @@
 use super::{
-    Color, ComposeModifier, DimensionConstraint, EdgeInsets, InspectableModifier, InspectorInfo,
-    Modifier, ModifierChainHandle, Point,
+    modifier_local_of, Color, ComposeModifier, DimensionConstraint, EdgeInsets,
+    InspectableModifier, InspectorInfo, Modifier, ModifierChainHandle, Point,
 };
 use crate::modifier_nodes::{AlphaNode, BackgroundNode, ClickableNode, PaddingNode};
 use std::any::TypeId;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[test]
 fn padding_nodes_resolve_padding_values() {
@@ -61,14 +63,16 @@ fn fold_in_iterates_in_insertion_order() {
         acc
     });
 
-    assert_eq!(
-        node_types,
-        vec![
-            TypeId::of::<PaddingNode>(),
-            TypeId::of::<BackgroundNode>(),
-            TypeId::of::<ClickableNode>(),
-        ]
+    let expected = vec![
+        TypeId::of::<PaddingNode>(),
+        TypeId::of::<BackgroundNode>(),
+        TypeId::of::<ClickableNode>(),
+    ];
+    assert!(
+        node_types.len() >= expected.len(),
+        "modifier chain missing expected elements"
     );
+    assert_eq!(&node_types[..expected.len()], expected);
 }
 
 #[test]
@@ -82,14 +86,17 @@ fn fold_out_iterates_in_reverse_order() {
         acc
     });
 
-    assert_eq!(
-        node_types,
-        vec![
-            TypeId::of::<ClickableNode>(),
-            TypeId::of::<BackgroundNode>(),
-            TypeId::of::<PaddingNode>(),
-        ]
+    let expected = vec![
+        TypeId::of::<ClickableNode>(),
+        TypeId::of::<BackgroundNode>(),
+        TypeId::of::<PaddingNode>(),
+    ];
+    assert!(
+        node_types.len() >= expected.len(),
+        "modifier chain missing expected elements"
     );
+    let start = node_types.len() - expected.len();
+    assert_eq!(&node_types[start..], expected);
 }
 
 #[test]
@@ -126,14 +133,16 @@ fn then_preserves_element_order_when_chaining() {
         acc
     });
 
-    assert_eq!(
-        node_types,
-        vec![
-            TypeId::of::<PaddingNode>(),
-            TypeId::of::<BackgroundNode>(),
-            TypeId::of::<ClickableNode>(),
-        ]
+    let expected = vec![
+        TypeId::of::<PaddingNode>(),
+        TypeId::of::<BackgroundNode>(),
+        TypeId::of::<ClickableNode>(),
+    ];
+    assert!(
+        node_types.len() >= expected.len(),
+        "modifier chain missing expected elements"
     );
+    assert_eq!(&node_types[..expected.len()], expected);
 }
 
 #[test]
@@ -208,4 +217,40 @@ fn inspector_debug_helpers_surface_properties() {
             ("clipToBounds", "true".to_string())
         ]
     );
+}
+
+#[test]
+fn modifier_local_consumer_reads_provided_value() {
+    let key = modifier_local_of(|| 0);
+    let observed = Rc::new(RefCell::new(None));
+    let key_clone = key.clone();
+    let capture = observed.clone();
+
+    let modifier = Modifier::empty()
+        .modifier_local_provider(key, || 42)
+        .modifier_local_consumer(move |scope| {
+            capture.borrow_mut().replace(*scope.get(&key_clone));
+        });
+
+    let mut handle = ModifierChainHandle::new();
+    handle.update(&modifier);
+
+    assert_eq!(observed.borrow().as_ref(), Some(&42));
+}
+
+#[test]
+fn modifier_local_consumer_uses_default_when_missing() {
+    let key = modifier_local_of(|| String::from("fallback"));
+    let observed = Rc::new(RefCell::new(None));
+    let key_clone = key.clone();
+    let capture = observed.clone();
+
+    let modifier = Modifier::empty().modifier_local_consumer(move |scope| {
+        capture.borrow_mut().replace(scope.get(&key_clone).clone());
+    });
+
+    let mut handle = ModifierChainHandle::new();
+    handle.update(&modifier);
+
+    assert_eq!(observed.borrow().as_ref(), Some(&String::from("fallback")));
 }

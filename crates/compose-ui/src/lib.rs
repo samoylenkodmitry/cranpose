@@ -50,7 +50,8 @@ pub use text::{measure_text, set_text_measurer, TextMeasurer, TextMetrics};
 
 // Debug utilities
 pub use debug::{
-    format_layout_tree, format_render_scene, log_layout_tree, log_render_scene, log_screen_summary,
+    format_layout_tree, format_render_scene, log_layout_tree, log_modifier_chain, log_render_scene,
+    log_screen_summary,
 };
 
 /// Convenience alias used in examples and tests.

@@ -5,9 +5,7 @@ use compose_foundation::{ModifierNode, ModifierNodeChain, PointerEvent};
 
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;
-use crate::modifier_nodes::{
-    ClickableNode, ClipToBoundsNode, DrawCommandNode, PointerEventHandlerNode,
-};
+use crate::modifier_nodes::{ClickableNode, ClipToBoundsNode, DrawCommandNode};
 
 use super::{ModifierChainHandle, Point};
 
