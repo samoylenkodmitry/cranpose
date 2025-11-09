@@ -1,30 +1,30 @@
-# Next Task: Wire Modifier Chains Into Real Layout Nodes
+# Next Task: Capability Bitmasks & Targeted Modifier Invalidations
 
 ## Context
-Modifier chains are now reconciled through `ModifierNodeChain` with full equality/hash semantics, but `LayoutNode`, `SubcomposeLayoutNode`, and the public layout primitives (Column/Row/Box) still read baked values from `ModifierState`. We need to push the reconciled chain + `ResolvedModifiers` through the layout tree so padding/offset/weight/graphics-layer data flows from modifier nodes the same way it does in Jetpack Compose. The Kotlin references (`LayoutNode.kt`, `NodeChain.kt`, Column/Row implementations) show how layout nodes own a chain handle, update it whenever their `Modifier` changes, and use capability-filtered iterators to drive measure/draw/subcompose pipelines.
+Layout/subcompose nodes now reconcile a `ModifierChainHandle` and read padding/weight/offset/graphics-layer data from `ResolvedModifiers`, but the chain still treats every modifier as if it were layout-affecting. Jetpack Compose relies on capability bitmasks (`NodeKind.kt`, `ModifierNodeChain.kt`) to know which phases (layout, draw, pointer input, semantics, modifier locals) need to run and to route `InvalidationKind` precisely. Without those masks, Compose-RS continues to invalidate full layout/draw passes even when only pointer nodes change, and we can’t yet expose filtered iterators for renderers or pointer dispatch. The immediate parity gap is wiring capability metadata through `ModifierNodeElement`, aggregating it per layout node, and ensuring invalidations/short-circuiting match Kotlin semantics.
 
 ## Goals
-1. Add a `ModifierChainHandle` to `LayoutNode`/`SubcomposeLayoutNode` and update their `set_modifier` / `update` paths to reconcile nodes and cache `ResolvedModifiers`.
-2. Teach Column/Row/Box (and any shared layout runner in `crates/compose-ui/src/layout`) to read padding/offset/weight from the reconciled handle instead of the legacy `ModifierState`.
-3. Ensure invalidations emitted by modifier nodes propagate through `LayoutNode` so layout/draw passes re-run only when necessary.
-4. Update docs/tests so future agents know layout primitives now depend on modifier nodes.
+1. Teach every modifier node/element to expose a capability bitmask mirroring Kotlin’s `NodeKind` flags (layout, draw, pointer, semantics, modifier locals).
+2. Aggregate masks inside `ModifierChainHandle`, `LayoutNode`, and `SubcomposeLayoutNode`, and store them so runtime subsystems can query `has_draw_nodes`, `has_pointer_input_nodes`, etc.
+3. Route `InvalidationKind` through the aggregated masks so `LayoutNode::mark_needs_measure`, `mark_needs_layout`, and future draw/pointer invalidations trigger only when a relevant capability is present.
+4. Add tests covering capability aggregation and invalidation routing, preventing regressions as more node-backed modifiers arrive.
 
 ## Suggested Steps
-1. **Embed the handle**
-   - Update `crates/compose-ui/src/widgets/nodes/layout_node.rs` (and the subcompose variant) to own a `ModifierChainHandle`. When `modifier` changes, call `handle.update(modifier)` and store `handle.resolved_modifiers()`.
-   - Expose lightweight accessors so measurement/draw code can ask a layout node for its resolved padding/background/weight info.
-2. **Use resolved data in layouts**
-   - In `crates/compose-ui/src/layout/mod.rs` (and any helper modules), replace direct reads of `ModifierState` padding/weight/offset with calls into the node handle. Start with Column/Row/Box since they are the highest-traffic primitives.
-   - Ensure measurement order stays compatible with Kotlin: run layout modifier nodes first, then intrinsic/measure the children.
-3. **Invalidations + plumbing**
-   - When the handle reports layout/draw invalidations, propagate them through `LayoutNode::request_layout` / `request_draw` (or the local equivalents) so the runtime reruns the affected phases.
-   - Add logging guarded by `COMPOSE_DEBUG_MODIFIERS` if it helps track regressions.
-4. **Docs/tests**
-   - Extend `modifier_match_with_jc.md` with a short note explaining layout nodes now reconcile modifier chains.
-   - Add/adjust tests (e.g., in `crates/compose-ui/src/tests/layout_tests.rs`) verifying Column/Row respect node-provided padding/weight without touching `ModifierState`.
+1. **Define bitmasks**  
+   - Mirror `androidx.compose.ui.node.NodeKind` by adding a `NodeCapability` bitflag type (likely in `compose_foundation`) and extending `ModifierNodeElement::capabilities()` / `NodeCapabilities` to return the mask.  
+   - Update existing elements (`PaddingElement`, `BackgroundElement`, `ClickableElement`, future pointer nodes) to declare the correct bits.
+2. **Aggregate per chain**  
+   - In `crates/compose-ui/src/modifier/chain.rs`, accumulate the capability mask while reconciling the chain and expose getters like `layout_kind_set`, `draw_kind_set`, `pointer_kind_set`.  
+   - Thread these aggregates into `LayoutNode`/`SubcomposeLayoutNode` (e.g., new `capabilities` field) so measurement/render pipelines can branch early when a slice is empty.
+3. **Wire invalidations**  
+   - Extend `LayoutNode::sync_modifier_chain` (and the subcompose variant) to inspect the aggregated mask when draining `InvalidationKind`s: only call `mark_needs_measure` if layout bits are present, add placeholders for draw/pointer/semantics invalidations, and ensure repeated requests short-circuit.  
+   - Follow Kotlin’s `ModifierNode.onAttach`/`onDetach` + `NodeCoordinator.requestUpdate` flow to keep lifecycle consistent.
+4. **Tests & parity checks**  
+   - Add unit tests in `crates/compose-ui/src/modifier/tests/` and/or `modifier_nodes_tests.rs` that register fake nodes with different capability combinations, mutate them, and assert only the expected flags toggle.  
+   - Add integration coverage in `crates/compose-ui/src/layout/tests/layout_tests.rs` to verify layout nodes skip `mark_needs_measure` when only pointer-capable nodes invalidate.
 
 ## Definition of Done
-- Each layout node instance owns an up-to-date `ModifierChainHandle` and cached `ResolvedModifiers`.
-- Column/Row/Box pull layout inputs (padding/weight/offset) from modifier nodes instead of `ModifierState`, and their behaviour matches Kotlin samples under `/media/huge/composerepo/.../compose/ui`.
-- Modifier-node invalidations bubble through `LayoutNode` so layout/draw rerun when the chain requests it.
-- Updated docs and tests cover the new plumbing, and `cargo test -p compose-ui` passes.
+- `ModifierNodeElement` / `ModifierNode` expose capability masks aligned with Jetpack Compose’s `NodeKind`.
+- `ModifierChainHandle` and layout/subcompose nodes cache aggregated capability bits and expose helpers for future pointer/draw/semantics traversals.
+- `LayoutNode::sync_modifier_chain` (and the subcompose equivalent) routes invalidations through the masks so only relevant phases mark dirty.
+- Tests cover capability aggregation and invalidation routing, and `cargo test -p compose-ui` passes.

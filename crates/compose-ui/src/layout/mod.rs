@@ -463,7 +463,7 @@ impl LayoutBuilderState {
             Rc::clone(&state.applier)
         };
 
-        let (node_handle, props, resolved_modifiers, offset) = {
+        let (node_handle, resolved_modifiers) = {
             let mut applier = applier_host.borrow_typed();
             let node = match applier.get_mut(node_id) {
                 Ok(node) => node,
@@ -473,10 +473,8 @@ impl LayoutBuilderState {
             let any = node.as_any_mut();
             if let Some(subcompose) = any.downcast_mut::<SubcomposeLayoutNode>() {
                 let handle = subcompose.handle();
-                let props = handle.layout_properties();
                 let resolved_modifiers = handle.resolved_modifiers();
-                let offset = handle.total_offset();
-                (handle, props, resolved_modifiers, offset)
+                (handle, resolved_modifiers)
             } else {
                 return Ok(None);
             }
@@ -496,8 +494,9 @@ impl LayoutBuilderState {
                 })?
         };
 
-        let mut padding = props.padding();
-        padding += resolved_modifiers.padding();
+        let props = resolved_modifiers.layout_properties();
+        let padding = resolved_modifiers.padding();
+        let offset = resolved_modifiers.offset();
         let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
 
         if let DimensionConstraint::Points(width) = props.width() {
@@ -618,10 +617,9 @@ impl LayoutBuilderState {
             return Ok(cached);
         }
 
-        let props = modifier.layout_properties();
-        let mut padding = props.padding();
-        padding += resolved_modifiers.padding();
-        let offset = modifier.total_offset();
+        let props = resolved_modifiers.layout_properties();
+        let padding = resolved_modifiers.padding();
+        let offset = resolved_modifiers.offset();
         let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
 
         if let DimensionConstraint::Points(width) = props.width() {
@@ -648,25 +646,18 @@ impl LayoutBuilderState {
         for &child_id in children.iter() {
             let measured = Rc::new(RefCell::new(None));
             let position = Rc::new(RefCell::new(None));
-            let child_info = {
+            let cache_handles = {
                 let mut applier = applier_host.borrow_typed();
-                match applier.with_node::<LayoutNode, _>(child_id, |layout_node| {
-                    let props = layout_node.modifier.layout_properties();
-                    (layout_node.cache_handles(), props.width(), props.height())
-                }) {
+                match applier
+                    .with_node::<LayoutNode, _>(child_id, |layout_node| layout_node.cache_handles())
+                {
                     Ok(value) => Some(value),
-                    Err(NodeError::TypeMismatch { .. }) => Some((
-                        LayoutNodeCacheHandles::default(),
-                        DimensionConstraint::Unspecified,
-                        DimensionConstraint::Unspecified,
-                    )),
+                    Err(NodeError::TypeMismatch { .. }) => Some(LayoutNodeCacheHandles::default()),
                     Err(NodeError::Missing { .. }) => None,
                     Err(err) => return Err(err),
                 }
             };
-            let Some((cache_handles, _child_width_constraint, _child_height_constraint)) =
-                child_info
-            else {
+            let Some(cache_handles) = cache_handles else {
                 continue;
             };
             cache_handles.activate(cache_epoch);
@@ -1205,7 +1196,7 @@ impl Measurable for LayoutChildMeasurable {
         let mut applier = self.applier.borrow_typed();
         applier
             .with_node::<LayoutNode, _>(self.node_id, |layout_node| {
-                let props = layout_node.modifier.layout_properties();
+                let props = layout_node.resolved_modifiers().layout_properties();
                 props.weight().map(|weight_data| {
                     compose_ui_layout::FlexParentData::new(weight_data.weight, weight_data.fill)
                 })
@@ -1279,7 +1270,8 @@ fn measure_node_with_host(
 
 fn measure_text(node_id: NodeId, node: &TextNode, constraints: Constraints) -> Rc<MeasuredNode> {
     let base = measure_text_content(&node.text);
-    measure_leaf(node_id, node.modifier.clone(), base, constraints)
+    let resolved = node.modifier.resolved_modifiers();
+    measure_leaf(node_id, resolved, base, constraints)
 }
 
 fn measure_spacer(
@@ -1287,19 +1279,19 @@ fn measure_spacer(
     node: &SpacerNode,
     constraints: Constraints,
 ) -> Rc<MeasuredNode> {
-    measure_leaf(node_id, Modifier::empty(), node.size, constraints)
+    let resolved = Modifier::empty().resolved_modifiers();
+    measure_leaf(node_id, resolved, node.size, constraints)
 }
 
 fn measure_leaf(
     node_id: NodeId,
-    modifier: Modifier,
+    resolved_modifiers: ResolvedModifiers,
     base_size: Size,
     constraints: Constraints,
 ) -> Rc<MeasuredNode> {
-    let props = modifier.layout_properties();
-    let mut padding = props.padding();
-    padding += modifier.resolved_modifiers().padding();
-    let offset = modifier.total_offset();
+    let props = resolved_modifiers.layout_properties();
+    let padding = resolved_modifiers.padding();
+    let offset = resolved_modifiers.offset();
 
     let mut width = base_size.width + padding.horizontal_sum();
     let mut height = base_size.height + padding.vertical_sum();

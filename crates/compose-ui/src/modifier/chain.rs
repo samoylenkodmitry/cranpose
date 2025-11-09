@@ -15,6 +15,7 @@ use crate::modifier_nodes::{BackgroundNode, CornerShapeNode, PaddingNode};
 pub struct ModifierChainHandle {
     chain: ModifierNodeChain,
     context: BasicModifierNodeContext,
+    resolved: ResolvedModifiers,
 }
 
 #[allow(dead_code)]
@@ -27,6 +28,7 @@ impl ModifierChainHandle {
     pub fn update(&mut self, modifier: &Modifier) {
         self.chain
             .update_from_slice(modifier.elements(), &mut self.context);
+        self.resolved = self.compute_resolved(modifier);
     }
 
     /// Returns the modifier node chain for read-only traversal.
@@ -40,7 +42,24 @@ impl ModifierChainHandle {
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
+        self.resolved
+    }
+
+    fn compute_resolved(&self, modifier: &Modifier) -> ResolvedModifiers {
         let mut resolved = ResolvedModifiers::default();
+        let layout = modifier.layout_properties();
+        resolved.set_layout_properties(layout);
+        resolved.set_padding(layout.padding());
+        resolved.set_offset(modifier.total_offset());
+        resolved.set_graphics_layer(modifier.graphics_layer_values());
+
+        if let Some(color) = modifier.background_color() {
+            resolved.set_background_color(color);
+        } else {
+            resolved.clear_background();
+        }
+        resolved.set_corner_shape(modifier.corner_shape());
+
         for node in self.chain.layout_nodes() {
             if let Some(padding) = node.as_any().downcast_ref::<PaddingNode>() {
                 resolved.add_padding(padding.padding());

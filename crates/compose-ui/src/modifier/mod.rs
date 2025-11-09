@@ -714,11 +714,27 @@ impl ResolvedBackground {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResolvedModifiers {
     padding: EdgeInsets,
     background: Option<ResolvedBackground>,
     corner_shape: Option<RoundedCornerShape>,
+    layout: LayoutProperties,
+    offset: Point,
+    graphics_layer: Option<GraphicsLayer>,
+}
+
+impl Default for ResolvedModifiers {
+    fn default() -> Self {
+        Self {
+            padding: EdgeInsets::default(),
+            background: None,
+            corner_shape: None,
+            layout: LayoutProperties::default(),
+            offset: Point::default(),
+            graphics_layer: None,
+        }
+    }
 }
 
 impl ResolvedModifiers {
@@ -734,8 +750,36 @@ impl ResolvedModifiers {
         self.corner_shape
     }
 
+    pub fn layout_properties(&self) -> LayoutProperties {
+        self.layout
+    }
+
+    pub fn offset(&self) -> Point {
+        self.offset
+    }
+
+    pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
+        self.graphics_layer
+    }
+
+    pub(crate) fn set_padding(&mut self, padding: EdgeInsets) {
+        self.padding = padding;
+    }
+
     pub(crate) fn add_padding(&mut self, padding: EdgeInsets) {
         self.padding += padding;
+    }
+
+    pub(crate) fn set_layout_properties(&mut self, layout: LayoutProperties) {
+        self.layout = layout;
+    }
+
+    pub(crate) fn set_offset(&mut self, offset: Point) {
+        self.offset = offset;
+    }
+
+    pub(crate) fn set_graphics_layer(&mut self, layer: Option<GraphicsLayer>) {
+        self.graphics_layer = layer;
     }
 
     pub(crate) fn set_background_color(&mut self, color: Color) {

@@ -38,20 +38,21 @@ Goal: match Jetpack Compose's `Modifier` API surface and `Modifier.Node` runtime
 
 ## Near-Term Next Steps
 1. **Capability bitmasks + targeted invalidations**  
-   - Mirror `NodeKind.kt` by giving each node a capability mask (layout/draw/pointer/semantics/etc.) and aggregate them inside `ModifierChainHandle`.  
-   - Route `InvalidationKind` automatically based on capability slices so `LayoutNode` can skip whole pipelines when masks show no interested nodes.  
-   - Reference Kotlin `NodeChain.aggregateChildKindSet` and `NodeCoordinator` to ensure the bitmask math matches.
+   - Mirror `NodeKind.kt` by giving every `ModifierNode` a capability mask (layout/draw/pointer/semantics/etc.) and aggregate those bits inside `ModifierChainHandle`, `LayoutNode`, and `SubcomposeLayoutNode`. Touch `compose_foundation::modifier.rs`, `crates/compose-ui/src/widgets/nodes/layout_node.rs`, and `crates/compose-ui/src/modifier/chain.rs`.  
+   - Route `InvalidationKind` automatically via the aggregated masks so `LayoutNode::mark_needs_*` only flips phases that actually have interested nodes. Kotlin references: `NodeChain.aggregateChildKindSet`, `DelegatableNode.highlightedKindSet`, and `NodeCoordinator.requestUpdate`.  
+   - Add focused tests under `crates/compose-ui/src/modifier/tests/` that create mock nodes per capability and assert the correct dirty flags fire when their state mutates.
 2. **Pointer/draw pipeline parity**  
-   - Teach renderers and pointer dispatchers to traverse node slices (layout/draw/pointer input) instead of reading `ModifierState`.  
-   - Port the pointer-input lifecycle (`PointerInputModifierNode`, awaitPointerEventScope cancellation) from Kotlin sources under `/media/huge/composerepo/.../node`.
+   - Teach renderers and pointer dispatchers to traverse capability-filtered node slices (`layout_nodes()`, `draw_nodes()`, `pointer_input_nodes()`) instead of reading `ModifierState`, matching Kotlin’s `DelegatableNode` walking helpers in `ModifierNodeChain.kt`.  
+   - Port the pointer-input lifecycle (`PointerInputModifierNode`, `AwaitPointerEventScope`, cancellation semantics) from `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer` into `crates/compose-ui/src/modifier/pointer_input.rs` so interactive modifiers (clickable, scrollable) behave identically.
 3. **Diagnostics + tooling**  
-   - Add `COMPOSE_DEBUG_MODIFIERS` tracing hooks and expose a debugging helper that prints the reconciled chain alongside capability masks for any layout node, mirroring Kotlin’s inspector utilities.
+   - Add `COMPOSE_DEBUG_MODIFIERS` tracing hooks that log node churn, capability masks, and invalidation kinds during `ModifierChainHandle::update`, and expose a debugging helper/tests (e.g., `crates/compose-ui/src/tests/debug_tests.rs`) that dump the reconciled chain + masks for a layout node, mirroring Kotlin’s inspector utilities.
 
 ---
 
 ## Progress Snapshot
 - `ModifierChainHandle` now lives inside `LayoutNode`/`SubcomposeLayoutNode`; every layout node reconciles its chain each frame and drains invalidations.
-- New `ResolvedModifiers` struct captures runtime-only data (currently node-driven padding) so measurement/render stacks no longer read `ModifierState`.
+- New `ResolvedModifiers` struct captures runtime-only data (padding, background, offset, graphics layers, and layout props) so measurement/render stacks no longer read `ModifierState`.
+- Layout/subcompose measurement now pull padding, offsets, graphics layers, and layout weights from `ResolvedModifiers`, so Column/Row/Box respect node-backed state instead of consulting the legacy `ModifierState`; regression tests (`crates/compose-ui/src/layout/tests/layout_tests.rs`) lock padding + weight behavior.
 - Padding modifiers exclusively emit `PaddingElement`s; layout/subcompose measurement subtract/adds padding from the resolved node data, matching Kotlin ordering.
 - Renderers (`headless`, `pixels`, `wgpu`) pull visual padding via `ResolvedModifiers`, keeping hit regions/text bounds consistent after the migration.
 - Background modifiers now surface through `ResolvedModifiers::background()`, combining the last `BackgroundNode` with any rounded-corner nodes so renderers no longer read legacy `ModifierState` color/shape caches.

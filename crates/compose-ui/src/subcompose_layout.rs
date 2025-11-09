@@ -185,7 +185,7 @@ impl SubcomposeLayoutNodeHandle {
     }
 
     pub fn layout_properties(&self) -> crate::modifier::LayoutProperties {
-        self.inner.borrow().modifier.layout_properties()
+        self.resolved_modifiers().layout_properties()
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
@@ -193,7 +193,7 @@ impl SubcomposeLayoutNodeHandle {
     }
 
     pub fn total_offset(&self) -> Point {
-        self.inner.borrow().modifier.total_offset()
+        self.resolved_modifiers().offset()
     }
 
     pub fn measure(

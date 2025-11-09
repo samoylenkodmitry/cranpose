@@ -1,8 +1,8 @@
 use super::*;
 use crate::modifier::{Modifier, Size};
-use compose_core::Applier;
+use compose_core::{Applier, ConcreteApplierHost, MemoryApplier};
 use compose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use super::core::Measurable;
 
@@ -179,6 +179,30 @@ fn layout_node_uses_measure_policy() -> Result<(), NodeError> {
     assert_eq!(measured.children.len(), 2);
     assert_eq!(measured.children[0].offset, Point { x: 0.0, y: 0.0 });
     assert_eq!(measured.children[1].offset, Point { x: 0.0, y: 20.0 });
+    Ok(())
+}
+
+#[test]
+fn layout_padding_comes_from_modifier_chain() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+    let layout_node = LayoutNode::new(Modifier::padding(8.0), Rc::new(VerticalStackPolicy));
+    let layout_id = applier.create(Box::new(layout_node));
+
+    let applier_host = Rc::new(ConcreteApplierHost::new(applier));
+    let mut builder = LayoutBuilder::new(Rc::clone(&applier_host));
+
+    let measured = builder.measure_node(
+        layout_id,
+        Constraints {
+            min_width: 0.0,
+            max_width: 100.0,
+            min_height: 0.0,
+            max_height: 100.0,
+        },
+    )?;
+
+    assert_eq!(measured.size.width, 16.0);
+    assert_eq!(measured.size.height, 16.0);
     Ok(())
 }
 
@@ -912,4 +936,34 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
     );
 
     Ok(())
+}
+
+#[test]
+fn flex_parent_data_uses_resolved_weight() {
+    let mut applier = MemoryApplier::new();
+    let layout_node = LayoutNode::new(
+        Modifier::empty().columnWeight(1.0, true),
+        Rc::new(MaxSizePolicy),
+    );
+    let cache = layout_node.cache_handles();
+    let node_id = applier.create(Box::new(layout_node));
+    let applier_host = Rc::new(ConcreteApplierHost::new(applier));
+
+    let measurable = LayoutChildMeasurable::new(
+        Rc::clone(&applier_host),
+        node_id,
+        Rc::new(RefCell::new(None)),
+        Rc::new(RefCell::new(None)),
+        Rc::new(RefCell::new(None)),
+        None,
+        cache,
+        1,
+        None,
+    );
+
+    let parent_data = measurable
+        .flex_parent_data()
+        .expect("expected weight to propagate via resolved modifiers");
+    assert_eq!(parent_data.weight, 1.0);
+    assert!(parent_data.fill);
 }
