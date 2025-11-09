@@ -400,6 +400,7 @@ pub type DynModifierElement = Rc<dyn AnyModifierElement>;
 struct ModifierNodeEntry {
     element_type: TypeId,
     key: Option<u64>,
+    hash_code: u64,
     element: DynModifierElement,
     node: Box<dyn ModifierNode>,
     attached: bool,
@@ -415,11 +416,13 @@ impl ModifierNodeEntry {
         key: Option<u64>,
         element: DynModifierElement,
         node: Box<dyn ModifierNode>,
+        hash_code: u64,
         capabilities: NodeCapabilities,
     ) -> Self {
         Self {
             element_type,
             key,
+            hash_code,
             element,
             node,
             attached: false,
@@ -471,20 +474,37 @@ impl ModifierNodeChain {
         for element in elements {
             let element_type = element.element_type();
             let key = element.key();
+            let hash_code = element.hash_code();
+            let capabilities = element.capabilities();
+            let mut same_element = false;
+            let mut reused_entry = None;
 
-            let reused_index = old_entries.iter().position(|entry| {
-                entry.element_type == element_type
-                    && match (key, entry.key) {
-                        (Some(lhs), Some(rhs)) => lhs == rhs,
-                        (None, None) => true,
-                        _ => false,
-                    }
-            });
+            if let Some(key_value) = key {
+                if let Some(index) = old_entries.iter().position(|entry| {
+                    entry.element_type == element_type && entry.key == Some(key_value)
+                }) {
+                    let entry = old_entries.remove(index);
+                    same_element = entry.element.as_ref().equals_element(element.as_ref());
+                    reused_entry = Some(entry);
+                }
+            } else if let Some(index) = old_entries.iter().position(|entry| {
+                entry.key.is_none()
+                    && entry.hash_code == hash_code
+                    && entry.element.as_ref().equals_element(element.as_ref())
+            }) {
+                let entry = old_entries.remove(index);
+                same_element = true;
+                reused_entry = Some(entry);
+            } else if let Some(index) = old_entries
+                .iter()
+                .position(|entry| entry.element_type == element_type && entry.key.is_none())
+            {
+                let entry = old_entries.remove(index);
+                same_element = entry.element.as_ref().equals_element(element.as_ref());
+                reused_entry = Some(entry);
+            }
 
-            if let Some(index) = reused_index {
-                let mut entry = old_entries.remove(index);
-                let same_element = entry.element.as_ref().equals_element(element.as_ref());
-
+            if let Some(mut entry) = reused_entry {
                 if !entry.attached {
                     entry.node.on_attach(context);
                     entry.attached = true;
@@ -497,14 +517,24 @@ impl ModifierNodeChain {
                 entry.key = key;
                 entry.element = element.clone();
                 entry.element_type = element_type;
+                entry.hash_code = hash_code;
+                entry.has_layout = capabilities.has_layout;
+                entry.has_draw = capabilities.has_draw;
+                entry.has_pointer_input = capabilities.has_pointer_input;
+                entry.has_semantics = capabilities.has_semantics;
                 new_entries.push(entry);
             } else {
-                let capabilities = element.capabilities();
                 let mut node = element.create_node();
                 node.on_attach(context);
                 element.update_node(node.as_mut());
-                let mut entry =
-                    ModifierNodeEntry::new(element_type, key, element.clone(), node, capabilities);
+                let mut entry = ModifierNodeEntry::new(
+                    element_type,
+                    key,
+                    element.clone(),
+                    node,
+                    hash_code,
+                    capabilities,
+                );
                 entry.attached = true;
                 new_entries.push(entry);
             }

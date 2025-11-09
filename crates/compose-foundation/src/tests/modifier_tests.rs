@@ -278,6 +278,46 @@ fn element_equality_controls_node_reuse() {
     assert_eq!(chain.node::<EqualityNode>(0).unwrap().value, 2);
 }
 
+#[test]
+fn equality_matching_prefers_identical_elements_over_type_matches() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = TestContext::default();
+
+    let updates = Rc::new(Cell::new(0));
+    let initial = vec![
+        modifier_element(EqualityElement {
+            value: 1,
+            updates: updates.clone(),
+        }),
+        modifier_element(EqualityElement {
+            value: 2,
+            updates: updates.clone(),
+        }),
+    ];
+    chain.update_from_slice(&initial, &mut context);
+    updates.set(0);
+
+    let reordered = vec![
+        modifier_element(EqualityElement {
+            value: 2,
+            updates: updates.clone(),
+        }),
+        modifier_element(EqualityElement {
+            value: 3,
+            updates: updates.clone(),
+        }),
+    ];
+    chain.update_from_slice(&reordered, &mut context);
+
+    assert_eq!(
+        updates.get(),
+        1,
+        "only the node whose element changed should be updated"
+    );
+    assert_eq!(chain.node::<EqualityNode>(0).unwrap().value, 2);
+    assert_eq!(chain.node::<EqualityNode>(1).unwrap().value, 3);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct KeyedElement {
     key: u64,

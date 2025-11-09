@@ -288,20 +288,19 @@ pub fn measure_layout(
 
     // Selective measure: only increment epoch if something needs measuring
     // O(1) check - just look at root's dirty flag (bubbling ensures correctness)
-    let (needs_measure, cached_epoch) =
-        match applier.with_node::<LayoutNode, _>(root, |node| {
-            (node.needs_layout(), node.cache_handles().epoch())
-        }) {
-            Ok(pair) => pair,
-            Err(NodeError::TypeMismatch { .. }) => {
-                let needs = {
-                    let node = applier.get_mut(root)?;
-                    node.needs_layout()
-                };
-                (needs, 0)
-            }
-            Err(err) => return Err(err),
-        };
+    let (needs_measure, cached_epoch) = match applier.with_node::<LayoutNode, _>(root, |node| {
+        (node.needs_layout(), node.cache_handles().epoch())
+    }) {
+        Ok(pair) => pair,
+        Err(NodeError::TypeMismatch { .. }) => {
+            let needs = {
+                let node = applier.get_mut(root)?;
+                node.needs_layout()
+            };
+            (needs, 0)
+        }
+        Err(err) => return Err(err),
+    };
 
     let epoch = if needs_measure {
         NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
