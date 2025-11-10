@@ -1,7 +1,8 @@
 use super::Modifier;
 use super::PointerEvent;
 use compose_foundation::{
-    ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities, PointerInputNode,
+    DelegatableNode, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
+    NodeState, PointerInputNode,
 };
 use compose_ui_graphics::Size;
 use futures_task::{waker, ArcWake};
@@ -351,6 +352,7 @@ pub struct SuspendingPointerInputNode {
     handler: PointerInputHandler,
     dispatcher: PointerEventDispatcher,
     task: Option<PointerInputTask>,
+    state: NodeState,
 }
 
 impl SuspendingPointerInputNode {
@@ -360,6 +362,7 @@ impl SuspendingPointerInputNode {
             handler,
             dispatcher: PointerEventDispatcher::new(),
             task: None,
+            state: NodeState::new(),
         }
     }
 
@@ -414,6 +417,12 @@ impl ModifierNode for SuspendingPointerInputNode {
 
     fn as_pointer_input_node_mut(&mut self) -> Option<&mut dyn PointerInputNode> {
         Some(self)
+    }
+}
+
+impl DelegatableNode for SuspendingPointerInputNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 

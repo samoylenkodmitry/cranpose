@@ -6,7 +6,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use compose_foundation::{
-    InvalidationKind, ModifierNode, ModifierNodeChain, ModifierNodeElement, NodeCapabilities,
+    DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeChain, ModifierNodeElement,
+    NodeCapabilities, NodeState,
 };
 
 /// Unique identifier generator for modifier local keys.
@@ -85,6 +86,7 @@ pub struct ModifierLocalProviderNode {
     value_factory: Rc<dyn Fn() -> Box<dyn Any>>,
     value: Rc<dyn Any>,
     version: u64,
+    state: NodeState,
 }
 
 impl ModifierLocalProviderNode {
@@ -94,6 +96,7 @@ impl ModifierLocalProviderNode {
             value: Self::create_value(&factory),
             value_factory: factory,
             version: 0,
+            state: NodeState::new(),
         }
     }
 
@@ -124,16 +127,26 @@ impl ModifierLocalProviderNode {
     }
 }
 
+impl DelegatableNode for ModifierLocalProviderNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
 impl ModifierNode for ModifierLocalProviderNode {}
 
 /// Node responsible for observing modifier local changes.
 pub struct ModifierLocalConsumerNode {
     callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)>,
+    state: NodeState,
 }
 
 impl ModifierLocalConsumerNode {
     fn new(callback: Rc<dyn for<'a> Fn(&mut ModifierLocalReadScope<'a>)>) -> Self {
-        Self { callback }
+        Self {
+            callback,
+            state: NodeState::new(),
+        }
     }
 
     fn notify(&self, scope: &mut ModifierLocalReadScope<'_>) {
@@ -296,6 +309,12 @@ impl ConsumerState {
 
     fn update_dependencies(&mut self, dependencies: Vec<DependencyRecord>) {
         self.dependencies = dependencies;
+    }
+}
+
+impl DelegatableNode for ModifierLocalConsumerNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 

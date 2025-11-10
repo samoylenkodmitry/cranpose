@@ -22,7 +22,7 @@ mod slices;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 #[allow(unused_imports)]
-pub use chain::ModifierChainHandle;
+pub use chain::{ModifierChainHandle, ModifierLocalsHandle};
 use compose_foundation::ModifierNodeElement;
 pub use compose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, PointerEvent, PointerEventKind,

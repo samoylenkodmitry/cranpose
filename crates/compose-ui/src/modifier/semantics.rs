@@ -3,17 +3,27 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use compose_foundation::{
-    ModifierNode, ModifierNodeElement, NodeCapabilities, SemanticsConfiguration,
-    SemanticsNode as SemanticsNodeTrait,
+    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
+    SemanticsConfiguration, SemanticsNode as SemanticsNodeTrait,
 };
 
 pub struct SemanticsModifierNode {
     recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
+    state: NodeState,
 }
 
 impl SemanticsModifierNode {
     pub fn new(recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>) -> Self {
-        Self { recorder }
+        Self {
+            recorder,
+            state: NodeState::new(),
+        }
+    }
+}
+
+impl DelegatableNode for SemanticsModifierNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 

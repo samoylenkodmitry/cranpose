@@ -8,6 +8,7 @@
 //! begin migrating without expanding the public API surface.
 
 use std::any::{type_name, Any, TypeId};
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -106,12 +107,66 @@ impl ModifierNodeContext for BasicModifierNodeContext {
     }
 }
 
+/// Runtime state tracked for every [`ModifierNode`].
+#[derive(Debug)]
+pub struct NodeState {
+    aggregate_child_capabilities: Cell<NodeCapabilities>,
+    capabilities: Cell<NodeCapabilities>,
+    is_sentinel: bool,
+}
+
+impl NodeState {
+    pub const fn new() -> Self {
+        Self {
+            aggregate_child_capabilities: Cell::new(NodeCapabilities::empty()),
+            capabilities: Cell::new(NodeCapabilities::empty()),
+            is_sentinel: false,
+        }
+    }
+
+    pub const fn sentinel() -> Self {
+        Self {
+            aggregate_child_capabilities: Cell::new(NodeCapabilities::empty()),
+            capabilities: Cell::new(NodeCapabilities::empty()),
+            is_sentinel: true,
+        }
+    }
+
+    pub fn set_capabilities(&self, capabilities: NodeCapabilities) {
+        self.capabilities.set(capabilities);
+    }
+
+    pub fn capabilities(&self) -> NodeCapabilities {
+        self.capabilities.get()
+    }
+
+    pub fn set_aggregate_child_capabilities(&self, capabilities: NodeCapabilities) {
+        self.aggregate_child_capabilities.set(capabilities);
+    }
+
+    pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
+        self.aggregate_child_capabilities.get()
+    }
+
+    pub fn is_sentinel(&self) -> bool {
+        self.is_sentinel
+    }
+}
+
+/// Provides traversal helpers that mirror Jetpack Compose's [`DelegatableNode`] contract.
+pub trait DelegatableNode {
+    fn node_state(&self) -> &NodeState;
+    fn aggregate_child_capabilities(&self) -> NodeCapabilities {
+        self.node_state().aggregate_child_capabilities()
+    }
+}
+
 /// Core trait implemented by modifier nodes.
 ///
 /// Nodes receive lifecycle callbacks when they attach to or detach from a
 /// composition and may optionally react to resets triggered by the runtime
 /// (for example, when reusing nodes across modifier list changes).
-pub trait ModifierNode: Any {
+pub trait ModifierNode: Any + DelegatableNode {
     fn on_attach(&mut self, _context: &mut dyn ModifierNodeContext) {}
 
     fn on_detach(&mut self) {}
@@ -609,7 +664,7 @@ impl ModifierNodeEntry {
         hash_code: u64,
         capabilities: NodeCapabilities,
     ) -> Self {
-        Self {
+        let entry = Self {
             element_type,
             key,
             hash_code,
@@ -619,7 +674,13 @@ impl ModifierNodeEntry {
             capabilities,
             links: NodeLinks::default(),
             aggregate_child_capabilities: NodeCapabilities::empty(),
-        }
+        };
+        entry
+            .node
+            .as_ref()
+            .node_state()
+            .set_capabilities(entry.capabilities);
+        entry
     }
 
     fn matches_invalidation(&self, kind: InvalidationKind) -> bool {
@@ -654,7 +715,29 @@ pub struct ModifierNodeChain {
     entries: Vec<Box<ModifierNodeEntry>>,
     aggregated_capabilities: NodeCapabilities,
     head_aggregate_child_capabilities: NodeCapabilities,
+    head_sentinel: Box<SentinelNode>,
+    tail_sentinel: Box<SentinelNode>,
 }
+
+struct SentinelNode {
+    state: NodeState,
+}
+
+impl SentinelNode {
+    fn new() -> Self {
+        Self {
+            state: NodeState::sentinel(),
+        }
+    }
+}
+
+impl DelegatableNode for SentinelNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for SentinelNode {}
 
 #[derive(Clone, Copy)]
 pub struct ModifierChainNodeRef<'a> {
@@ -674,6 +757,8 @@ impl ModifierNodeChain {
             entries: Vec::new(),
             aggregated_capabilities: NodeCapabilities::empty(),
             head_aggregate_child_capabilities: NodeCapabilities::empty(),
+            head_sentinel: Box::new(SentinelNode::new()),
+            tail_sentinel: Box::new(SentinelNode::new()),
         }
     }
 
@@ -738,6 +823,11 @@ impl ModifierNodeChain {
                     entry_mut.element_type = element_type;
                     entry_mut.hash_code = hash_code;
                     entry_mut.capabilities = capabilities;
+                    entry_mut
+                        .node
+                        .as_ref()
+                        .node_state()
+                        .set_capabilities(entry_mut.capabilities);
                     aggregated |= entry_mut.capabilities;
                 }
                 new_entries.push(entry);
@@ -766,6 +856,11 @@ impl ModifierNodeChain {
                 entry.node.on_detach();
                 entry.attached = false;
             }
+            entry
+                .node
+                .as_ref()
+                .node_state()
+                .set_aggregate_child_capabilities(NodeCapabilities::empty());
         }
 
         self.entries = new_entries;
@@ -799,9 +894,13 @@ impl ModifierNodeChain {
                 entry.node.on_detach();
                 entry.attached = false;
             }
+            let state = entry.node.as_ref().node_state();
+            state.set_aggregate_child_capabilities(NodeCapabilities::empty());
+            state.set_capabilities(NodeCapabilities::empty());
         }
         self.aggregated_capabilities = NodeCapabilities::empty();
         self.head_aggregate_child_capabilities = NodeCapabilities::empty();
+        self.sync_chain_links();
     }
 
     pub fn len(&self) -> usize {
@@ -1031,12 +1130,19 @@ impl ModifierNodeChain {
 
     fn sync_chain_links(&mut self) {
         let len = self.entries.len();
+
         if len == 0 {
+            self.head_sentinel
+                .node_state()
+                .set_aggregate_child_capabilities(NodeCapabilities::empty());
+            self.tail_sentinel
+                .node_state()
+                .set_aggregate_child_capabilities(NodeCapabilities::empty());
             self.head_aggregate_child_capabilities = NodeCapabilities::empty();
             return;
         }
 
-        for (index, entry) in self.entries.iter_mut().enumerate() {
+        for index in 0..len {
             let parent = if index == 0 {
                 ChainPosition::Head
             } else {
@@ -1047,15 +1153,29 @@ impl ModifierNodeChain {
             } else {
                 ChainPosition::Entry(index + 1)
             };
+            let entry = &mut self.entries[index];
             entry.links = NodeLinks { parent, child };
         }
 
         let mut aggregate = NodeCapabilities::empty();
-        for entry in self.entries.iter_mut().rev() {
+        for index in (0..len).rev() {
+            let entry = &mut self.entries[index];
             aggregate |= entry.capabilities;
             entry.aggregate_child_capabilities = aggregate;
+            entry
+                .node
+                .as_ref()
+                .node_state()
+                .set_aggregate_child_capabilities(aggregate);
         }
+
         self.head_aggregate_child_capabilities = aggregate;
+        self.head_sentinel
+            .node_state()
+            .set_aggregate_child_capabilities(aggregate);
+        self.tail_sentinel
+            .node_state()
+            .set_aggregate_child_capabilities(NodeCapabilities::empty());
     }
 }
 

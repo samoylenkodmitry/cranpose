@@ -6,7 +6,7 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 
 ## Current Gaps (Compose-RS)
 - `Modifier` is still an Rc-backed builder with cached layout/draw state for legacy APIs. Renderers now read reconciled node slices, but `ModifierState` continues to provide padding/layout caches and must be removed once every factory is node-backed.
-- `compose_foundation::ModifierNodeChain` now owns safe sentinel head/tail nodes plus parent/child metadata, yet it still lacks Kotlin’s delegate-chain surface (`DelegatableNode`, `NodeChain#headToTail`, `aggregateChildKindSet` propagation into layout nodes). Capability filtering remains per-chain rather than per ancestor traversal, so focus/modifier-local semantics can drift from Android.
+- `compose_foundation::ModifierNodeChain` still lacks Kotlin’s delegate-chain surface (`DelegatableNode`, `DelegatingNode`, `NodeChain#headToTail`). Entries expose capability masks, but there is no delegate stack, parent/child traversal contract, or `aggregateChildKindSet` propagation through delegates, so focus/modifier-local semantics can drift from Android.
 - Modifier locals now register providers/consumers per chain, but their invalidations still bubble through coarse layout flags and the semantics/focus stacks continue to rely on legacy metadata instead of Kotlin’s `ModifierLocalManager` + `SemanticsOwner` pairing.
 - Semantics extraction still mixes modifier-node data with `RuntimeNodeMetadata`, so we never build the Kotlin-style `SemanticsOwner` tree or honor capability-scoped traversal/invalidations (semantics-only changes continue to trigger layout).
 - Diagnostics exist (`Modifier::fmt`, `debug::log_modifier_chain`, `COMPOSE_DEBUG_MODIFIERS`), but we still lack parity tooling such as Kotlin’s inspector strings, capability dumps with delegate depth, and targeted tracing hooks used by focus/pointer stacks.
@@ -18,8 +18,9 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 - Pointer input stack under `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/input/pointer`.
 
 ## Recent Progress
-- `ModifierNodeChain` now stores safe sentinel head/tail nodes, parent/child links, and aggregate capability masks without `unsafe`, enabling deterministic traversal order and `COMPOSE_DEBUG_MODIFIERS` dumps.
+- `ModifierNodeChain` now stores safe sentinel head/tail nodes and aggregate capability masks without `unsafe`, enabling deterministic traversal order and `COMPOSE_DEBUG_MODIFIERS` dumps.
 - Modifier locals graduated to a Kotlin-style manager: providers/consumers stay registered per chain, invalidations return from `ModifierChainHandle`, layout nodes resolve ancestor values via a registry, and regression tests now cover overrides + ancestor propagation; semantics nodes continue to be defined via `Modifier::semantics`, but the semantics tree still needs to consume the new data.
+- Layout nodes expose modifier-local data to ancestors without raw pointers: `ModifierChainHandle` shares a `ModifierLocalsHandle`, `LayoutNode` updates a pointer-free registry entry, and `resolve_modifier_local_from_parent_chain` now mirrors Kotlin’s `ModifierLocalManager` traversal while staying completely safe.
 - Diagnostics improved: `Modifier` implements `Display`, `compose_ui::debug::log_modifier_chain` enumerates nodes/capabilities, and DEBUG env flags print chains after reconciliation.
 - Core modifier factories (`padding`, `background`, `draw*`, `clipToBounds`, `pointerInput`, `clickable`) are node-backed, and pointer input runs on coroutine-driven scaffolding mirroring Kotlin. Renderers and pointer dispatch now operate exclusively on reconciled node slices.
 
@@ -38,7 +39,7 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 ## Near-Term Next Steps
 1. **Delegate + ancestor traversal parity (in flight)**  
    - ✅ `ModifierNodeChain` now exposes sentinel-safe `head_to_tail`, `tail_to_head`, and filtered visitors plus cached `aggregate_child_capabilities` on both the chain and owning `LayoutNode`.  
-   - Next: port Kotlin’s delegate APIs (`DelegatableNode`, `DelegatingNode`, `node.parent/child` contract) so every `ModifierNode` exposes the same traversal surface, and make delegate chains update capability masks the same way Kotlin’s `NodeChain` does.  
+   - Next: port Kotlin’s delegate APIs (`DelegatableNode`, `DelegatingNode`, `node.parent/child` contract) so every `ModifierNode` exposes the same traversal surface, propagate `aggregateChildKindSet` through delegate stacks, and route focus/modifier-local traversals through the delegate helpers provided by `androidx.compose.ui.node.NodeChain`.  
    - Finish mirroring Kotlin’s diff helpers (`trimChain`, `padChain`, delegate reuse rules) so keyed reuse + capability recompute follow the reference semantics.
 2. **Semantics stack parity**  
    - Re-read `androidx/compose/ui/node/Semantics*` and port the Kotlin contract: build semantics trees by walking modifier nodes via capability masks, keep per-node `SemanticsConfiguration` caches, and expose a `SemanticsOwner`-equivalent that downstream renderers/tests can query.  

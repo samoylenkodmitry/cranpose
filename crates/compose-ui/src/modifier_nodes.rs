@@ -48,9 +48,9 @@
 //! the migration is complete.
 
 use compose_foundation::{
-    Constraints, DrawModifierNode, DrawScope, LayoutModifierNode, Measurable, ModifierNode,
-    ModifierNodeContext, ModifierNodeElement, NodeCapabilities, PointerEvent, PointerEventKind,
-    PointerInputNode, Size,
+    Constraints, DelegatableNode, DrawModifierNode, DrawScope, LayoutModifierNode, Measurable,
+    ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
+    PointerEvent, PointerEventKind, PointerInputNode, Size,
 };
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -80,15 +80,25 @@ fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
 #[derive(Debug)]
 pub struct PaddingNode {
     padding: EdgeInsets,
+    state: NodeState,
 }
 
 impl PaddingNode {
     pub fn new(padding: EdgeInsets) -> Self {
-        Self { padding }
+        Self {
+            padding,
+            state: NodeState::new(),
+        }
     }
 
     pub fn padding(&self) -> EdgeInsets {
         self.padding
+    }
+}
+
+impl DelegatableNode for PaddingNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 
@@ -207,11 +217,16 @@ impl ModifierNodeElement for PaddingElement {
 pub struct BackgroundNode {
     color: Color,
     shape: Option<RoundedCornerShape>,
+    state: NodeState,
 }
 
 impl BackgroundNode {
     pub fn new(color: Color) -> Self {
-        Self { color, shape: None }
+        Self {
+            color,
+            shape: None,
+            state: NodeState::new(),
+        }
     }
 
     pub fn color(&self) -> Color {
@@ -220,6 +235,12 @@ impl BackgroundNode {
 
     pub fn shape(&self) -> Option<RoundedCornerShape> {
         self.shape
+    }
+}
+
+impl DelegatableNode for BackgroundNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 
@@ -293,15 +314,25 @@ impl ModifierNodeElement for BackgroundElement {
 #[derive(Debug)]
 pub struct CornerShapeNode {
     shape: RoundedCornerShape,
+    state: NodeState,
 }
 
 impl CornerShapeNode {
     pub fn new(shape: RoundedCornerShape) -> Self {
-        Self { shape }
+        Self {
+            shape,
+            state: NodeState::new(),
+        }
     }
 
     pub fn shape(&self) -> RoundedCornerShape {
         self.shape
+    }
+}
+
+impl DelegatableNode for CornerShapeNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 
@@ -373,11 +404,22 @@ impl ModifierNodeElement for CornerShapeElement {
 pub struct SizeNode {
     width: Option<f32>,
     height: Option<f32>,
+    state: NodeState,
 }
 
 impl SizeNode {
     pub fn new(width: Option<f32>, height: Option<f32>) -> Self {
-        Self { width, height }
+        Self {
+            width,
+            height,
+            state: NodeState::new(),
+        }
+    }
+}
+
+impl DelegatableNode for SizeNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 
@@ -484,6 +526,7 @@ impl ModifierNodeElement for SizeElement {
 /// Node that handles click/tap interactions.
 pub struct ClickableNode {
     on_click: Rc<dyn Fn(Point)>,
+    state: NodeState,
 }
 
 impl std::fmt::Debug for ClickableNode {
@@ -496,15 +539,25 @@ impl ClickableNode {
     pub fn new(on_click: impl Fn(Point) + 'static) -> Self {
         Self {
             on_click: Rc::new(on_click),
+            state: NodeState::new(),
         }
     }
 
     pub fn with_handler(on_click: Rc<dyn Fn(Point)>) -> Self {
-        Self { on_click }
+        Self {
+            on_click,
+            state: NodeState::new(),
+        }
     }
 
     pub fn handler(&self) -> Rc<dyn Fn(Point)> {
         self.on_click.clone()
+    }
+}
+
+impl DelegatableNode for ClickableNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 
@@ -621,6 +674,7 @@ impl ModifierNodeElement for ClickableElement {
 /// Node that dispatches pointer events to a user-provided handler.
 pub struct PointerEventHandlerNode {
     handler: Rc<dyn Fn(PointerEvent)>,
+    state: NodeState,
 }
 
 impl std::fmt::Debug for PointerEventHandlerNode {
@@ -631,11 +685,20 @@ impl std::fmt::Debug for PointerEventHandlerNode {
 
 impl PointerEventHandlerNode {
     pub fn new(handler: Rc<dyn Fn(PointerEvent)>) -> Self {
-        Self { handler }
+        Self {
+            handler,
+            state: NodeState::new(),
+        }
     }
 
     pub fn handler(&self) -> Rc<dyn Fn(PointerEvent)> {
         self.handler.clone()
+    }
+}
+
+impl DelegatableNode for PointerEventHandlerNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 
@@ -729,13 +792,21 @@ impl ModifierNodeElement for PointerEventHandlerElement {
 #[derive(Debug)]
 pub struct AlphaNode {
     alpha: f32,
+    state: NodeState,
 }
 
 impl AlphaNode {
     pub fn new(alpha: f32) -> Self {
         Self {
             alpha: alpha.clamp(0.0, 1.0),
+            state: NodeState::new(),
         }
+    }
+}
+
+impl DelegatableNode for AlphaNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 
@@ -811,11 +882,21 @@ impl ModifierNodeElement for AlphaElement {
 
 /// Node that marks the subtree for clipping during rendering.
 #[derive(Debug)]
-pub struct ClipToBoundsNode;
+pub struct ClipToBoundsNode {
+    state: NodeState,
+}
 
 impl ClipToBoundsNode {
     pub fn new() -> Self {
-        Self
+        Self {
+            state: NodeState::new(),
+        }
+    }
+}
+
+impl DelegatableNode for ClipToBoundsNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 
@@ -868,15 +949,25 @@ impl ModifierNodeElement for ClipToBoundsElement {
 /// Node that stores draw commands emitted by draw modifiers.
 pub struct DrawCommandNode {
     commands: Vec<DrawCommand>,
+    state: NodeState,
 }
 
 impl DrawCommandNode {
     pub fn new(commands: Vec<DrawCommand>) -> Self {
-        Self { commands }
+        Self {
+            commands,
+            state: NodeState::new(),
+        }
     }
 
     pub fn commands(&self) -> &[DrawCommand] {
         &self.commands
+    }
+}
+
+impl DelegatableNode for DrawCommandNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
     }
 }
 

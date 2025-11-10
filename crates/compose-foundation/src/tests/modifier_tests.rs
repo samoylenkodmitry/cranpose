@@ -24,6 +24,13 @@ struct LoggingNode {
     id: &'static str,
     log: Rc<RefCell<Vec<String>>>,
     value: i32,
+    state: NodeState,
+}
+
+impl DelegatableNode for LoggingNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
 }
 
 impl ModifierNode for LoggingNode {
@@ -70,6 +77,7 @@ impl ModifierNodeElement for LoggingElement {
             id: self.id,
             log: self.log.clone(),
             value: self.value,
+            state: NodeState::new(),
         }
     }
 
@@ -194,9 +202,16 @@ fn chain_reuses_nodes_when_reordered() {
     assert_eq!(&*log.borrow(), &["detach:b", "detach:a"]);
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug)]
 struct EqualityNode {
     value: i32,
+    state: NodeState,
+}
+
+impl DelegatableNode for EqualityNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
 }
 
 impl ModifierNode for EqualityNode {}
@@ -225,7 +240,10 @@ impl ModifierNodeElement for EqualityElement {
     type Node = EqualityNode;
 
     fn create(&self) -> Self::Node {
-        EqualityNode { value: self.value }
+        EqualityNode {
+            value: self.value,
+            state: NodeState::new(),
+        }
     }
 
     fn update(&self, node: &mut Self::Node) {
@@ -328,7 +346,10 @@ impl ModifierNodeElement for KeyedElement {
     type Node = EqualityNode;
 
     fn create(&self) -> Self::Node {
-        EqualityNode { value: self.value }
+        EqualityNode {
+            value: self.value,
+            state: NodeState::new(),
+        }
     }
 
     fn update(&self, node: &mut Self::Node) {
@@ -388,7 +409,10 @@ impl ModifierNodeElement for InspectorElement {
     type Node = EqualityNode;
 
     fn create(&self) -> Self::Node {
-        EqualityNode { value: self.value }
+        EqualityNode {
+            value: self.value,
+            state: NodeState::new(),
+        }
     }
 
     fn update(&self, node: &mut Self::Node) {
@@ -435,8 +459,24 @@ impl Hash for InvalidationElement {
     }
 }
 
-#[derive(Debug, Default)]
-struct InvalidationNode;
+#[derive(Debug)]
+struct InvalidationNode {
+    state: NodeState,
+}
+
+impl Default for InvalidationNode {
+    fn default() -> Self {
+        Self {
+            state: NodeState::new(),
+        }
+    }
+}
+
+impl DelegatableNode for InvalidationNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
 
 impl ModifierNodeElement for InvalidationElement {
     type Node = InvalidationNode;
@@ -503,9 +543,25 @@ fn basic_context_records_invalidations_and_updates() {
 }
 
 // Test for specialized node traits
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct TestLayoutNode {
     measure_count: Cell<usize>,
+    state: NodeState,
+}
+
+impl Default for TestLayoutNode {
+    fn default() -> Self {
+        Self {
+            measure_count: Cell::new(0),
+            state: NodeState::new(),
+        }
+    }
+}
+
+impl DelegatableNode for TestLayoutNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
 }
 
 impl ModifierNode for TestLayoutNode {}
@@ -546,9 +602,25 @@ impl ModifierNodeElement for TestLayoutElement {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct TestDrawNode {
     draw_count: Cell<usize>,
+    state: NodeState,
+}
+
+impl Default for TestDrawNode {
+    fn default() -> Self {
+        Self {
+            draw_count: Cell::new(0),
+            state: NodeState::new(),
+        }
+    }
+}
+
+impl DelegatableNode for TestDrawNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
 }
 
 impl ModifierNode for TestDrawNode {

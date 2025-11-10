@@ -2,7 +2,8 @@ use crate::{
     layout::MeasuredNode,
     modifier::{
         collect_modifier_slices, Modifier, ModifierChainHandle, ModifierLocalSource,
-        ModifierLocalToken, ModifierNodeSlices, ResolvedModifierLocal, ResolvedModifiers,
+        ModifierLocalToken, ModifierLocalsHandle, ModifierNodeSlices, ResolvedModifierLocal,
+        ResolvedModifiers,
     },
 };
 use compose_core::{Node, NodeId};
@@ -14,7 +15,6 @@ use indexmap::IndexSet;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::ptr::NonNull;
 use std::rc::Rc;
 
 #[derive(Clone)]
@@ -209,6 +209,7 @@ impl LayoutNode {
         let mut invalidations = self.modifier_chain.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
         self.dispatch_modifier_invalidations(&invalidations);
+        self.refresh_registry_state();
     }
 
     fn dispatch_modifier_invalidations(&self, invalidations: &[InvalidationKind]) {
@@ -275,6 +276,7 @@ impl LayoutNode {
             unregister_layout_node(existing);
         }
         register_layout_node(id, self);
+        self.refresh_registry_state();
     }
 
     /// Get this node's ID.
@@ -285,11 +287,13 @@ impl LayoutNode {
     /// Set this node's parent (called when node is added as child).
     pub fn set_parent(&self, parent: NodeId) {
         self.parent.set(Some(parent));
+        self.refresh_registry_state();
     }
 
     /// Clear this node's parent (called when node is removed from parent).
     pub fn clear_parent(&self) {
         self.parent.set(None);
+        self.refresh_registry_state();
     }
 
     /// Get this node's parent.
@@ -320,6 +324,10 @@ impl LayoutNode {
         self.modifier_child_capabilities
     }
 
+    pub fn modifier_locals_handle(&self) -> ModifierLocalsHandle {
+        self.modifier_chain.modifier_locals_handle()
+    }
+
     pub fn has_layout_modifier_nodes(&self) -> bool {
         self.modifier_capabilities
             .contains(NodeCapabilities::LAYOUT)
@@ -337,6 +345,21 @@ impl LayoutNode {
     pub fn has_semantics_modifier_nodes(&self) -> bool {
         self.modifier_capabilities
             .contains(NodeCapabilities::SEMANTICS)
+    }
+
+    fn refresh_registry_state(&self) {
+        if let Some(id) = self.id.get() {
+            let parent = self.parent();
+            let capabilities = self.modifier_child_capabilities();
+            let modifier_locals = self.modifier_locals_handle();
+            LAYOUT_NODE_REGISTRY.with(|registry| {
+                if let Some(entry) = registry.borrow_mut().get_mut(&id) {
+                    entry.parent = parent;
+                    entry.modifier_child_capabilities = capabilities;
+                    entry.modifier_locals = modifier_locals;
+                }
+            });
+        }
     }
 
     pub fn draw_nodes(&self) -> impl Iterator<Item = &dyn DrawModifierNode> {
@@ -478,13 +501,26 @@ impl Drop for LayoutNode {
 }
 
 thread_local! {
-    static LAYOUT_NODE_REGISTRY: RefCell<HashMap<NodeId, NonNull<LayoutNode>>> =
+    static LAYOUT_NODE_REGISTRY: RefCell<HashMap<NodeId, LayoutNodeRegistryEntry>> =
         RefCell::new(HashMap::new());
+}
+
+struct LayoutNodeRegistryEntry {
+    parent: Option<NodeId>,
+    modifier_child_capabilities: NodeCapabilities,
+    modifier_locals: ModifierLocalsHandle,
 }
 
 fn register_layout_node(id: NodeId, node: &LayoutNode) {
     LAYOUT_NODE_REGISTRY.with(|registry| {
-        registry.borrow_mut().insert(id, NonNull::from(node));
+        registry.borrow_mut().insert(
+            id,
+            LayoutNodeRegistryEntry {
+                parent: node.parent(),
+                modifier_child_capabilities: node.modifier_child_capabilities(),
+                modifier_locals: node.modifier_locals_handle(),
+            },
+        );
     });
 }
 
@@ -494,38 +530,36 @@ fn unregister_layout_node(id: NodeId) {
     });
 }
 
-fn layout_node_ptr(id: NodeId) -> Option<NonNull<LayoutNode>> {
-    LAYOUT_NODE_REGISTRY.with(|registry| registry.borrow().get(&id).copied())
-}
-
 fn resolve_modifier_local_from_parent_chain(
     start: Option<NodeId>,
     token: ModifierLocalToken,
 ) -> Option<ResolvedModifierLocal> {
     let mut current = start;
     while let Some(parent_id) = current {
-        let parent_ptr = match layout_node_ptr(parent_id) {
-            Some(ptr) => ptr,
-            None => break,
-        };
-        let resolved = unsafe {
-            let parent = parent_ptr.as_ref();
-            if parent
-                .modifier_child_capabilities()
-                .contains(NodeCapabilities::MODIFIER_LOCALS)
-            {
-                parent
-                    .modifier_chain
-                    .resolve_modifier_local(token)
-                    .map(|value| value.with_source(ModifierLocalSource::Ancestor))
+        let (next_parent, resolved) = LAYOUT_NODE_REGISTRY.with(|registry| {
+            let registry = registry.borrow();
+            if let Some(entry) = registry.get(&parent_id) {
+                let resolved = if entry
+                    .modifier_child_capabilities
+                    .contains(NodeCapabilities::MODIFIER_LOCALS)
+                {
+                    entry
+                        .modifier_locals
+                        .borrow()
+                        .resolve(token)
+                        .map(|value| value.with_source(ModifierLocalSource::Ancestor))
+                } else {
+                    None
+                };
+                (entry.parent, resolved)
             } else {
-                None
+                (None, None)
             }
-        };
-        if resolved.is_some() {
-            return resolved;
+        });
+        if let Some(value) = resolved {
+            return Some(value);
         }
-        current = unsafe { parent_ptr.as_ref().parent() };
+        current = next_parent;
     }
     None
 }

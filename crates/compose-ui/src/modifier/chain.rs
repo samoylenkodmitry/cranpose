@@ -7,21 +7,37 @@ use super::{
     ResolvedModifierLocal, ResolvedModifiers,
 };
 use crate::modifier_nodes::{BackgroundNode, CornerShapeNode, PaddingNode};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Runtime helper that keeps a [`ModifierNodeChain`] in sync with a [`Modifier`].
 ///
 /// This is the first step toward Jetpack Compose parity: callers can keep a handle
 /// per layout node, feed it the latest `Modifier`, and then drive layout/draw/input
 /// phases through the reconciled chain.
+pub type ModifierLocalsHandle = Rc<RefCell<ModifierLocalManager>>;
+
 #[allow(dead_code)]
-#[derive(Default)]
 pub struct ModifierChainHandle {
     chain: ModifierNodeChain,
     context: BasicModifierNodeContext,
     resolved: ResolvedModifiers,
     capabilities: NodeCapabilities,
     aggregate_child_capabilities: NodeCapabilities,
-    modifier_locals: ModifierLocalManager,
+    modifier_locals: ModifierLocalsHandle,
+}
+
+impl Default for ModifierChainHandle {
+    fn default() -> Self {
+        Self {
+            chain: ModifierNodeChain::new(),
+            context: BasicModifierNodeContext::new(),
+            resolved: ResolvedModifiers::default(),
+            capabilities: NodeCapabilities::default(),
+            aggregate_child_capabilities: NodeCapabilities::default(),
+            modifier_locals: Rc::new(RefCell::new(ModifierLocalManager::new())),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -45,7 +61,10 @@ impl ModifierChainHandle {
             .update_from_slice(modifier.elements(), &mut self.context);
         self.capabilities = self.chain.capabilities();
         self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
-        let modifier_local_invalidations = self.modifier_locals.sync(&mut self.chain, resolver);
+        let modifier_local_invalidations = self
+            .modifier_locals
+            .borrow_mut()
+            .sync(&mut self.chain, resolver);
         if std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some() {
             crate::debug::log_modifier_chain(self.chain());
         }
@@ -97,7 +116,11 @@ impl ModifierChainHandle {
         &self,
         token: ModifierLocalToken,
     ) -> Option<ResolvedModifierLocal> {
-        self.modifier_locals.resolve(token)
+        self.modifier_locals.borrow().resolve(token)
+    }
+
+    pub fn modifier_locals_handle(&self) -> ModifierLocalsHandle {
+        Rc::clone(&self.modifier_locals)
     }
 
     fn compute_resolved(&self, modifier: &Modifier) -> ResolvedModifiers {
