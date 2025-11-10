@@ -1,11 +1,13 @@
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use compose_foundation::{ModifierNode, ModifierNodeElement, NodeCapabilities};
+use compose_foundation::{
+    InvalidationKind, ModifierNode, ModifierNodeChain, ModifierNodeElement, NodeCapabilities,
+};
 
 /// Unique identifier generator for modifier local keys.
 static NEXT_MODIFIER_LOCAL_ID: AtomicU64 = AtomicU64::new(1);
@@ -14,7 +16,7 @@ static NEXT_MODIFIER_LOCAL_ID: AtomicU64 = AtomicU64::new(1);
 struct ModifierLocalId(u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct ModifierLocalToken {
+pub(crate) struct ModifierLocalToken {
     id: ModifierLocalId,
     type_id: TypeId,
 }
@@ -82,6 +84,7 @@ pub struct ModifierLocalProviderNode {
     token: ModifierLocalToken,
     value_factory: Rc<dyn Fn() -> Box<dyn Any>>,
     value: Rc<dyn Any>,
+    version: u64,
 }
 
 impl ModifierLocalProviderNode {
@@ -90,11 +93,18 @@ impl ModifierLocalProviderNode {
             token,
             value: Self::create_value(&factory),
             value_factory: factory,
+            version: 0,
         }
     }
 
     fn update_value(&mut self) {
         self.value = Self::create_value(&self.value_factory);
+        self.version = self.version.wrapping_add(1);
+    }
+
+    fn set_factory(&mut self, factory: Rc<dyn Fn() -> Box<dyn Any>>) {
+        self.value_factory = factory;
+        self.update_value();
     }
 
     fn token(&self) -> ModifierLocalToken {
@@ -103,6 +113,10 @@ impl ModifierLocalProviderNode {
 
     fn value(&self) -> Rc<dyn Any> {
         self.value.clone()
+    }
+
+    fn version(&self) -> u64 {
+        self.version
     }
 
     fn create_value(factory: &Rc<dyn Fn() -> Box<dyn Any>>) -> Rc<dyn Any> {
@@ -124,6 +138,164 @@ impl ModifierLocalConsumerNode {
 
     fn notify(&self, scope: &mut ModifierLocalReadScope<'_>) {
         (self.callback)(scope);
+    }
+
+    fn id(&self) -> usize {
+        self as *const Self as usize
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ResolvedModifierLocal {
+    value: Rc<dyn Any>,
+    version: u64,
+    source: ModifierLocalSource,
+}
+
+impl ResolvedModifierLocal {
+    fn new(value: Rc<dyn Any>, version: u64, source: ModifierLocalSource) -> Self {
+        Self {
+            value,
+            version,
+            source,
+        }
+    }
+
+    pub(crate) fn value(&self) -> Rc<dyn Any> {
+        self.value.clone()
+    }
+
+    pub(crate) fn version(&self) -> u64 {
+        self.version
+    }
+
+    pub(crate) fn source(&self) -> ModifierLocalSource {
+        self.source
+    }
+
+    pub(crate) fn with_source(mut self, source: ModifierLocalSource) -> Self {
+        self.source = source;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModifierLocalSource {
+    Chain,
+    Ancestor,
+}
+
+pub(crate) type ModifierLocalAncestorResolver<'a> =
+    dyn FnMut(ModifierLocalToken) -> Option<ResolvedModifierLocal> + 'a;
+
+#[derive(Clone)]
+struct ProviderRecord {
+    value: Rc<dyn Any>,
+    version: u64,
+}
+
+impl ProviderRecord {
+    fn new(value: Rc<dyn Any>, version: u64) -> Self {
+        Self { value, version }
+    }
+
+    fn version(&self) -> u64 {
+        self.version
+    }
+
+    fn value(&self) -> &Rc<dyn Any> {
+        &self.value
+    }
+}
+
+#[derive(Clone)]
+struct DependencyRecord {
+    token: ModifierLocalToken,
+    source: DependencySource,
+    version: u64,
+}
+
+impl DependencyRecord {
+    fn from_chain(token: ModifierLocalToken, version: u64) -> Self {
+        Self {
+            token,
+            source: DependencySource::Chain,
+            version,
+        }
+    }
+
+    fn from_ancestor(token: ModifierLocalToken, version: u64) -> Self {
+        Self {
+            token,
+            source: DependencySource::Ancestor,
+            version,
+        }
+    }
+
+    fn from_default(token: ModifierLocalToken) -> Self {
+        Self {
+            token,
+            source: DependencySource::Default,
+            version: 0,
+        }
+    }
+
+    fn is_dirty(
+        &self,
+        providers: &HashMap<ModifierLocalId, ProviderRecord>,
+        ancestor_lookup: &mut ModifierLocalAncestorResolver<'_>,
+    ) -> bool {
+        match self.source {
+            DependencySource::Chain => match providers.get(&self.token.id()) {
+                Some(record) => record.version() != self.version,
+                None => true,
+            },
+            DependencySource::Ancestor => {
+                if providers.contains_key(&self.token.id()) {
+                    return true;
+                }
+                ancestor_lookup(self.token)
+                    .map(|resolved| resolved.version() != self.version)
+                    .unwrap_or(true)
+            }
+            DependencySource::Default => {
+                providers.contains_key(&self.token.id()) || ancestor_lookup(self.token).is_some()
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DependencySource {
+    Chain,
+    Ancestor,
+    Default,
+}
+
+struct ConsumerState {
+    dependencies: Vec<DependencyRecord>,
+}
+
+impl ConsumerState {
+    fn new(dependencies: Vec<DependencyRecord>) -> Self {
+        Self { dependencies }
+    }
+
+    fn needs_update(
+        &self,
+        providers: &HashMap<ModifierLocalId, ProviderRecord>,
+        ancestor_lookup: &mut ModifierLocalAncestorResolver<'_>,
+    ) -> bool {
+        if self.dependencies.is_empty() {
+            return true;
+        }
+        self.dependencies
+            .iter()
+            .any(|dependency| dependency.is_dirty(providers, ancestor_lookup))
+    }
+
+    fn update_dependencies(&mut self, dependencies: Vec<DependencyRecord>) {
+        self.dependencies = dependencies;
     }
 }
 
@@ -180,7 +352,7 @@ impl ModifierNodeElement for ModifierLocalProviderElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.update_value();
+        node.set_factory(self.factory.clone());
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -242,28 +414,54 @@ impl ModifierNodeElement for ModifierLocalConsumerElement {
 
 /// Lightweight read scope surfaced to modifier local consumers.
 pub struct ModifierLocalReadScope<'a> {
-    providers: &'a HashMap<ModifierLocalId, Rc<dyn Any>>,
+    providers: &'a HashMap<ModifierLocalId, ProviderRecord>,
+    ancestor_lookup: &'a mut ModifierLocalAncestorResolver<'a>,
+    dependencies: &'a mut Vec<DependencyRecord>,
     fallbacks: HashMap<ModifierLocalId, Rc<dyn Any>>,
 }
 
 impl<'a> ModifierLocalReadScope<'a> {
-    fn new(providers: &'a HashMap<ModifierLocalId, Rc<dyn Any>>) -> Self {
+    fn new(
+        providers: &'a HashMap<ModifierLocalId, ProviderRecord>,
+        ancestor_lookup: &'a mut ModifierLocalAncestorResolver<'a>,
+        dependencies: &'a mut Vec<DependencyRecord>,
+    ) -> Self {
         Self {
             providers,
+            ancestor_lookup,
+            dependencies,
             fallbacks: HashMap::new(),
         }
     }
 
     pub fn get<T: 'static>(&mut self, key: &ModifierLocalKey<T>) -> &T {
-        if let Some(value) = self.providers.get(&key.token().id()) {
-            return value
+        let token = key.token();
+        if let Some(record) = self.providers.get(&token.id()) {
+            self.dependencies
+                .push(DependencyRecord::from_chain(token, record.version()));
+            return record
+                .value()
                 .downcast_ref::<T>()
                 .expect("modifier local type mismatch");
         }
 
+        if let Some(resolved) = (self.ancestor_lookup)(token) {
+            self.dependencies
+                .push(DependencyRecord::from_ancestor(token, resolved.version()));
+            let entry = self
+                .fallbacks
+                .entry(token.id())
+                .or_insert_with(|| resolved.value());
+            return entry
+                .downcast_ref::<T>()
+                .expect("modifier local type mismatch");
+        }
+
+        self.dependencies
+            .push(DependencyRecord::from_default(token));
         let value = self
             .fallbacks
-            .entry(key.token().id())
+            .entry(token.id())
             .or_insert_with(|| Rc::new(key.default_value()) as Rc<dyn Any>);
         value
             .downcast_ref::<T>()
@@ -272,31 +470,82 @@ impl<'a> ModifierLocalReadScope<'a> {
 }
 
 #[derive(Default)]
-pub struct ModifierLocalManager;
+pub struct ModifierLocalManager {
+    providers: HashMap<ModifierLocalId, ProviderRecord>,
+    consumers: HashMap<usize, ConsumerState>,
+}
 
 impl ModifierLocalManager {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
-    pub fn sync(&mut self, chain: &mut compose_foundation::ModifierNodeChain) {
+    pub fn sync(
+        &mut self,
+        chain: &mut ModifierNodeChain,
+        ancestor_lookup: &mut ModifierLocalAncestorResolver<'_>,
+    ) -> Vec<InvalidationKind> {
         if !chain.has_capability(NodeCapabilities::MODIFIER_LOCALS) {
-            return;
+            self.providers.clear();
+            self.consumers.clear();
+            return Vec::new();
         }
-        let mut providers: HashMap<ModifierLocalId, Rc<dyn Any>> = HashMap::new();
+
+        let mut providers: HashMap<ModifierLocalId, ProviderRecord> = HashMap::new();
+        let mut seen_consumers = HashSet::new();
+        let mut invalidations = Vec::new();
+
         chain.visit_nodes_mut(|node, capabilities| {
             if !capabilities.contains(NodeCapabilities::MODIFIER_LOCALS) {
                 return;
             }
             if let Some(provider) = node.as_any().downcast_ref::<ModifierLocalProviderNode>() {
-                providers.insert(provider.token().id(), provider.value());
+                providers.insert(
+                    provider.token().id(),
+                    ProviderRecord::new(provider.value(), provider.version()),
+                );
             } else if let Some(consumer) = node
                 .as_any_mut()
                 .downcast_mut::<ModifierLocalConsumerNode>()
             {
-                let mut scope = ModifierLocalReadScope::new(&providers);
-                consumer.notify(&mut scope);
+                let id = consumer.id();
+                seen_consumers.insert(id);
+                let needs_update = self
+                    .consumers
+                    .get(&id)
+                    .map(|state| state.needs_update(&providers, ancestor_lookup))
+                    .unwrap_or(true);
+                if needs_update {
+                    let mut dependencies = Vec::new();
+                    {
+                        let mut scope = ModifierLocalReadScope::new(
+                            &providers,
+                            ancestor_lookup,
+                            &mut dependencies,
+                        );
+                        consumer.notify(&mut scope);
+                    }
+                    self.consumers.insert(id, ConsumerState::new(dependencies));
+                    if !invalidations.contains(&InvalidationKind::Layout) {
+                        invalidations.push(InvalidationKind::Layout);
+                    }
+                }
             }
         });
+
+        self.providers = providers;
+        self.consumers.retain(|id, _| seen_consumers.contains(id));
+
+        invalidations
+    }
+
+    pub(crate) fn resolve(&self, token: ModifierLocalToken) -> Option<ResolvedModifierLocal> {
+        self.providers.get(&token.id()).map(|record| {
+            ResolvedModifierLocal::new(
+                record.value().clone(),
+                record.version(),
+                ModifierLocalSource::Chain,
+            )
+        })
     }
 }

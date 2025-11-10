@@ -2,7 +2,10 @@ use compose_foundation::{
     BasicModifierNodeContext, InvalidationKind, ModifierNode, ModifierNodeChain, NodeCapabilities,
 };
 
-use super::{local::ModifierLocalManager, Modifier, ResolvedModifiers};
+use super::{
+    local::ModifierLocalManager, Modifier, ModifierLocalAncestorResolver, ModifierLocalToken,
+    ResolvedModifierLocal, ResolvedModifiers,
+};
 use crate::modifier_nodes::{BackgroundNode, CornerShapeNode, PaddingNode};
 
 /// Runtime helper that keeps a [`ModifierNodeChain`] in sync with a [`Modifier`].
@@ -28,16 +31,26 @@ impl ModifierChainHandle {
     }
 
     /// Reconciles the underlying [`ModifierNodeChain`] with the elements stored in `modifier`.
-    pub fn update(&mut self, modifier: &Modifier) {
+    pub fn update(&mut self, modifier: &Modifier) -> Vec<InvalidationKind> {
+        let mut resolver = |_: ModifierLocalToken| None;
+        self.update_with_resolver(modifier, &mut resolver)
+    }
+
+    pub fn update_with_resolver(
+        &mut self,
+        modifier: &Modifier,
+        resolver: &mut ModifierLocalAncestorResolver<'_>,
+    ) -> Vec<InvalidationKind> {
         self.chain
             .update_from_slice(modifier.elements(), &mut self.context);
         self.capabilities = self.chain.capabilities();
         self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
-        self.modifier_locals.sync(&mut self.chain);
+        let modifier_local_invalidations = self.modifier_locals.sync(&mut self.chain, resolver);
         if std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some() {
             crate::debug::log_modifier_chain(self.chain());
         }
         self.resolved = self.compute_resolved(modifier);
+        modifier_local_invalidations
     }
 
     /// Returns the modifier node chain for read-only traversal.
@@ -78,6 +91,13 @@ impl ModifierChainHandle {
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.resolved
+    }
+
+    pub fn resolve_modifier_local(
+        &self,
+        token: ModifierLocalToken,
+    ) -> Option<ResolvedModifierLocal> {
+        self.modifier_locals.resolve(token)
     }
 
     fn compute_resolved(&self, modifier: &Modifier) -> ResolvedModifiers {
@@ -131,7 +151,7 @@ mod tests {
     fn attaches_padding_node_and_invalidates_layout() {
         let mut handle = ModifierChainHandle::new();
 
-        handle.update(&Modifier::padding(8.0));
+        let _ = handle.update(&Modifier::padding(8.0));
 
         assert_eq!(handle.chain().len(), 1);
 
@@ -143,11 +163,11 @@ mod tests {
     fn reuses_nodes_between_updates() {
         let mut handle = ModifierChainHandle::new();
 
-        handle.update(&Modifier::padding(12.0));
+        let _ = handle.update(&Modifier::padding(12.0));
         let first_ptr = node_ptr::<PaddingNode>(&handle);
         handle.take_invalidations();
 
-        handle.update(&Modifier::padding(12.0));
+        let _ = handle.update(&Modifier::padding(12.0));
         let second_ptr = node_ptr::<PaddingNode>(&handle);
 
         assert_eq!(first_ptr, second_ptr, "expected the node to be reused");
@@ -160,7 +180,7 @@ mod tests {
     #[test]
     fn resolved_modifiers_capture_background_and_shape() {
         let mut handle = ModifierChainHandle::new();
-        handle.update(
+        let _ = handle.update(
             &Modifier::background(Color(0.2, 0.3, 0.4, 1.0)).then(Modifier::rounded_corners(8.0)),
         );
         let resolved = handle.resolved_modifiers();
@@ -173,7 +193,7 @@ mod tests {
             Some(RoundedCornerShape::uniform(8.0))
         );
 
-        handle.update(
+        let _ = handle.update(
             &Modifier::rounded_corners(4.0).then(Modifier::background(Color(0.9, 0.1, 0.1, 1.0))),
         );
         let resolved = handle.resolved_modifiers();
@@ -186,7 +206,7 @@ mod tests {
             Some(RoundedCornerShape::uniform(4.0))
         );
 
-        handle.update(&Modifier::empty());
+        let _ = handle.update(&Modifier::empty());
         let resolved = handle.resolved_modifiers();
         assert!(resolved.background().is_none());
         assert!(resolved.corner_shape().is_none());
@@ -195,14 +215,14 @@ mod tests {
     #[test]
     fn capability_mask_updates_with_chain() {
         let mut handle = ModifierChainHandle::new();
-        handle.update(&Modifier::padding(4.0));
+        let _ = handle.update(&Modifier::padding(4.0));
         assert_eq!(handle.capabilities(), NodeCapabilities::LAYOUT);
         assert!(handle.has_layout_nodes());
         assert!(!handle.has_draw_nodes());
         handle.take_invalidations();
 
         let color = Color(0.5, 0.6, 0.7, 1.0);
-        handle.update(&Modifier::background(color));
+        let _ = handle.update(&Modifier::background(color));
         assert_eq!(handle.capabilities(), NodeCapabilities::DRAW);
         assert!(handle.has_draw_nodes());
         assert!(!handle.has_layout_nodes());

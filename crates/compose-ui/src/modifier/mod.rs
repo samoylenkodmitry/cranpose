@@ -34,6 +34,9 @@ pub use compose_ui_graphics::{
 use compose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]
 pub use local::{modifier_local_of, ModifierLocalKey, ModifierLocalReadScope};
+pub(crate) use local::{
+    ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
+};
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use slices::{collect_modifier_slices, collect_slices_from_modifier, ModifierNodeSlices};
@@ -526,7 +529,7 @@ impl Modifier {
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         let mut handle = ModifierChainHandle::new();
-        handle.update(self);
+        let _ = handle.update(self);
         handle.resolved_modifiers()
     }
 

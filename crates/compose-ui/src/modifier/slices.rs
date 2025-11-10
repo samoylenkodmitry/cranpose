@@ -112,6 +112,6 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
 /// Collects modifier node slices by instantiating a temporary node chain from a [`Modifier`].
 pub fn collect_slices_from_modifier(modifier: &Modifier) -> ModifierNodeSlices {
     let mut handle = ModifierChainHandle::new();
-    handle.update(modifier);
+    let _ = handle.update(modifier);
     collect_modifier_slices(handle.chain()).with_chain_guard(handle)
 }

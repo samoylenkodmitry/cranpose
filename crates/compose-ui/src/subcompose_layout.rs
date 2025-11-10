@@ -309,11 +309,15 @@ impl SubcomposeLayoutNodeInner {
 
     fn set_modifier(&mut self, modifier: Modifier) {
         self.modifier = modifier;
-        self.modifier_chain.update(&self.modifier);
+        let modifier_local_invalidations = self.modifier_chain.update(&self.modifier);
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
         // Drain invalidations for now; subcompose nodes will route them when subsystems are ready.
         let _ = self.modifier_chain.take_invalidations();
+        debug_assert!(
+            modifier_local_invalidations.is_empty(),
+            "subcompose layout nodes currently ignore modifier local invalidations"
+        );
     }
 }
 

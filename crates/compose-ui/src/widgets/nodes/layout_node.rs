@@ -1,8 +1,8 @@
 use crate::{
     layout::MeasuredNode,
     modifier::{
-        collect_modifier_slices, Modifier, ModifierChainHandle, ModifierNodeSlices,
-        ResolvedModifiers,
+        collect_modifier_slices, Modifier, ModifierChainHandle, ModifierLocalSource,
+        ModifierLocalToken, ModifierNodeSlices, ResolvedModifierLocal, ResolvedModifiers,
     },
 };
 use compose_core::{Node, NodeId};
@@ -11,9 +11,11 @@ use compose_foundation::{
 };
 use compose_ui_layout::{Constraints, MeasurePolicy};
 use indexmap::IndexSet;
-use std::cell::Cell;
-use std::hash::Hash;
-use std::{cell::RefCell, hash::Hasher, rc::Rc};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::ptr::NonNull;
+use std::rc::Rc;
 
 #[derive(Clone)]
 struct MeasurementCacheEntry {
@@ -194,11 +196,18 @@ impl LayoutNode {
     }
 
     fn sync_modifier_chain(&mut self) {
-        self.modifier_chain.update(&self.modifier);
+        let start_parent = self.parent();
+        let mut resolver = move |token: ModifierLocalToken| {
+            resolve_modifier_local_from_parent_chain(start_parent, token)
+        };
+        let modifier_local_invalidations = self
+            .modifier_chain
+            .update_with_resolver(&self.modifier, &mut resolver);
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
         self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
-        let invalidations = self.modifier_chain.take_invalidations();
+        let mut invalidations = self.modifier_chain.take_invalidations();
+        invalidations.extend(modifier_local_invalidations);
         self.dispatch_modifier_invalidations(&invalidations);
     }
 
@@ -262,7 +271,10 @@ impl LayoutNode {
 
     /// Set this node's ID (called by applier after creation).
     pub fn set_node_id(&self, id: NodeId) {
-        self.id.set(Some(id));
+        if let Some(existing) = self.id.replace(Some(id)) {
+            unregister_layout_node(existing);
+        }
+        register_layout_node(id, self);
     }
 
     /// Get this node's ID.
@@ -283,6 +295,13 @@ impl LayoutNode {
     /// Get this node's parent.
     pub fn parent(&self) -> Option<NodeId> {
         self.parent.get()
+    }
+
+    fn resolve_modifier_local_from_ancestors(
+        &self,
+        token: ModifierLocalToken,
+    ) -> Option<ResolvedModifierLocal> {
+        resolve_modifier_local_from_parent_chain(self.parent(), token)
     }
 
     pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
@@ -375,7 +394,7 @@ impl Clone for LayoutNode {
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
             parent: Cell::new(self.parent.get()),
-            id: Cell::new(self.id.get()),
+            id: Cell::new(None),
         };
         node.sync_modifier_chain();
         node
@@ -448,6 +467,67 @@ impl Node for LayoutNode {
     fn needs_layout(&self) -> bool {
         self.needs_layout.get()
     }
+}
+
+impl Drop for LayoutNode {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.get() {
+            unregister_layout_node(id);
+        }
+    }
+}
+
+thread_local! {
+    static LAYOUT_NODE_REGISTRY: RefCell<HashMap<NodeId, NonNull<LayoutNode>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn register_layout_node(id: NodeId, node: &LayoutNode) {
+    LAYOUT_NODE_REGISTRY.with(|registry| {
+        registry.borrow_mut().insert(id, NonNull::from(node));
+    });
+}
+
+fn unregister_layout_node(id: NodeId) {
+    LAYOUT_NODE_REGISTRY.with(|registry| {
+        registry.borrow_mut().remove(&id);
+    });
+}
+
+fn layout_node_ptr(id: NodeId) -> Option<NonNull<LayoutNode>> {
+    LAYOUT_NODE_REGISTRY.with(|registry| registry.borrow().get(&id).copied())
+}
+
+fn resolve_modifier_local_from_parent_chain(
+    start: Option<NodeId>,
+    token: ModifierLocalToken,
+) -> Option<ResolvedModifierLocal> {
+    let mut current = start;
+    while let Some(parent_id) = current {
+        let parent_ptr = match layout_node_ptr(parent_id) {
+            Some(ptr) => ptr,
+            None => break,
+        };
+        let resolved = unsafe {
+            let parent = parent_ptr.as_ref();
+            if parent
+                .modifier_child_capabilities()
+                .contains(NodeCapabilities::MODIFIER_LOCALS)
+            {
+                parent
+                    .modifier_chain
+                    .resolve_modifier_local(token)
+                    .map(|value| value.with_source(ModifierLocalSource::Ancestor))
+            } else {
+                None
+            }
+        };
+        if resolved.is_some() {
+            return resolved;
+        }
+        current = unsafe { parent_ptr.as_ref().parent() };
+    }
+    None
 }
 
 #[cfg(test)]

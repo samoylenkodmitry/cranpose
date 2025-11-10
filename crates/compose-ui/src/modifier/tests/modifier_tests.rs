@@ -1,6 +1,7 @@
 use super::{
     modifier_local_of, Color, ComposeModifier, DimensionConstraint, EdgeInsets,
-    InspectableModifier, InspectorInfo, Modifier, ModifierChainHandle, Point,
+    InspectableModifier, InspectorInfo, Modifier, ModifierChainHandle, ModifierLocalSource,
+    ModifierLocalToken, Point,
 };
 use crate::modifier_nodes::{AlphaNode, BackgroundNode, ClickableNode, PaddingNode};
 use std::any::TypeId;
@@ -13,7 +14,7 @@ fn padding_nodes_resolve_padding_values() {
         .then(Modifier::padding_horizontal(2.0))
         .then(Modifier::padding_each(1.0, 3.0, 5.0, 7.0));
     let mut handle = ModifierChainHandle::new();
-    handle.update(&modifier);
+    let _ = handle.update(&modifier);
     let padding = handle.resolved_modifiers().padding();
     assert_eq!(
         padding,
@@ -233,7 +234,7 @@ fn modifier_local_consumer_reads_provided_value() {
         });
 
     let mut handle = ModifierChainHandle::new();
-    handle.update(&modifier);
+    let _ = handle.update(&modifier);
 
     assert_eq!(observed.borrow().as_ref(), Some(&42));
 }
@@ -250,7 +251,92 @@ fn modifier_local_consumer_uses_default_when_missing() {
     });
 
     let mut handle = ModifierChainHandle::new();
-    handle.update(&modifier);
+    let _ = handle.update(&modifier);
 
     assert_eq!(observed.borrow().as_ref(), Some(&String::from("fallback")));
+}
+
+#[test]
+fn modifier_local_consumer_runs_only_when_dependencies_change() {
+    let key = modifier_local_of(|| 0);
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let capture = observed.clone();
+    let key_clone = key.clone();
+
+    let modifier = Modifier::empty()
+        .modifier_local_provider(key.clone(), || 42)
+        .modifier_local_consumer(move |scope| {
+            capture.borrow_mut().push(*scope.get(&key_clone));
+        });
+
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+    let _ = handle.update(&modifier);
+
+    let values = observed.borrow();
+    assert_eq!(values.as_slice(), &[42]);
+}
+
+#[test]
+fn modifier_local_consumer_reads_from_parent_chain() {
+    let key = modifier_local_of(|| 0);
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let capture = observed.clone();
+    let key_clone = key.clone();
+
+    let mut parent_handle = ModifierChainHandle::new();
+    let parent_modifier = Modifier::empty().modifier_local_provider(key.clone(), || 7);
+    let _ = parent_handle.update(&parent_modifier);
+
+    let child_modifier = Modifier::empty().modifier_local_consumer(move |scope| {
+        capture.borrow_mut().push(*scope.get(&key_clone));
+    });
+    let mut child_handle = ModifierChainHandle::new();
+    {
+        let mut resolver = |token: ModifierLocalToken| {
+            parent_handle
+                .resolve_modifier_local(token)
+                .map(|value| value.with_source(ModifierLocalSource::Ancestor))
+        };
+        let _ = child_handle.update_with_resolver(&child_modifier, &mut resolver);
+    }
+
+    assert_eq!(observed.borrow().as_slice(), &[7]);
+}
+
+#[test]
+fn modifier_local_consumer_invalidated_by_parent_change() {
+    let key = modifier_local_of(|| 0);
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let capture = observed.clone();
+    let key_clone = key.clone();
+
+    let mut parent_handle = ModifierChainHandle::new();
+    let mut child_handle = ModifierChainHandle::new();
+
+    let child_modifier = Modifier::empty().modifier_local_consumer(move |scope| {
+        capture.borrow_mut().push(*scope.get(&key_clone));
+    });
+
+    let _ = parent_handle.update(&Modifier::empty().modifier_local_provider(key.clone(), || 1));
+    {
+        let mut resolver = |token: ModifierLocalToken| {
+            parent_handle
+                .resolve_modifier_local(token)
+                .map(|value| value.with_source(ModifierLocalSource::Ancestor))
+        };
+        let _ = child_handle.update_with_resolver(&child_modifier, &mut resolver);
+    }
+
+    let _ = parent_handle.update(&Modifier::empty().modifier_local_provider(key.clone(), || 5));
+    {
+        let mut resolver = |token: ModifierLocalToken| {
+            parent_handle
+                .resolve_modifier_local(token)
+                .map(|value| value.with_source(ModifierLocalSource::Ancestor))
+        };
+        let _ = child_handle.update_with_resolver(&child_modifier, &mut resolver);
+    }
+
+    assert_eq!(observed.borrow().as_slice(), &[1, 5]);
 }
