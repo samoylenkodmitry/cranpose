@@ -117,6 +117,10 @@ impl SubcomposeLayoutNode {
         self.inner.borrow_mut().set_modifier(modifier);
     }
 
+    pub fn set_debug_modifiers(&mut self, enabled: bool) {
+        self.inner.borrow_mut().set_debug_modifiers(enabled);
+    }
+
     pub fn modifier(&self) -> Modifier {
         self.handle().modifier()
     }
@@ -221,6 +225,10 @@ impl SubcomposeLayoutNodeHandle {
             .contains(NodeCapabilities::SEMANTICS)
     }
 
+    pub fn set_debug_modifiers(&self, enabled: bool) {
+        self.inner.borrow_mut().set_debug_modifiers(enabled);
+    }
+
     pub fn measure(
         &self,
         composer: &Composer,
@@ -287,6 +295,7 @@ struct SubcomposeLayoutNodeInner {
     measure_policy: Rc<MeasurePolicy>,
     children: IndexSet<NodeId>,
     slots: SlotBackend,
+    debug_modifiers: bool,
 }
 
 impl SubcomposeLayoutNodeInner {
@@ -300,6 +309,7 @@ impl SubcomposeLayoutNodeInner {
             measure_policy,
             children: IndexSet::new(),
             slots: SlotBackend::default(),
+            debug_modifiers: false,
         }
     }
 
@@ -309,6 +319,7 @@ impl SubcomposeLayoutNodeInner {
 
     fn set_modifier(&mut self, modifier: Modifier) {
         self.modifier = modifier;
+        self.modifier_chain.set_debug_logging(self.debug_modifiers);
         let modifier_local_invalidations = self.modifier_chain.update(&self.modifier);
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
@@ -318,6 +329,11 @@ impl SubcomposeLayoutNodeInner {
             modifier_local_invalidations.is_empty(),
             "subcompose layout nodes currently ignore modifier local invalidations"
         );
+    }
+
+    fn set_debug_modifiers(&mut self, enabled: bool) {
+        self.debug_modifiers = enabled;
+        self.modifier_chain.set_debug_logging(enabled);
     }
 }
 

@@ -2,7 +2,7 @@
 //!
 //! Reference: /media/huge/composerepo/compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
 
-use super::{inspector_metadata, DimensionConstraint, InspectorMetadata, Modifier, Size};
+use super::{inspector_metadata, DimensionConstraint, Modifier, Size};
 use crate::modifier_nodes::{IntrinsicSizeElement, SizeElement};
 use compose_ui_layout::IntrinsicSize;
 

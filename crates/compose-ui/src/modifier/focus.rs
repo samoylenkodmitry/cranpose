@@ -9,8 +9,8 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use compose_foundation::{
-    DelegatableNode, FocusNode, FocusState, InvalidationKind, ModifierNode, ModifierNodeContext,
-    ModifierNodeElement, NodeCapabilities, NodeState,
+    DelegatableNode, FocusNode, FocusState, ModifierNode, ModifierNodeContext, ModifierNodeElement,
+    NodeCapabilities, NodeState,
 };
 
 /// Focus direction for navigation.

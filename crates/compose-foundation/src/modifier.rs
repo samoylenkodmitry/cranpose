@@ -1415,6 +1415,22 @@ impl<'a> ModifierChainNodeRef<'a> {
         }
     }
 
+    /// Returns the entry index backing this node when it is part of the chain.
+    pub fn entry_index(&self) -> Option<usize> {
+        match &self.link {
+            NodeLink::Entry(path) => Some(path.entry()),
+            _ => None,
+        }
+    }
+
+    /// Returns how many delegate hops separate this node from its root element.
+    pub fn delegate_depth(&self) -> usize {
+        match &self.link {
+            NodeLink::Entry(path) => path.delegates().len(),
+            _ => 0,
+        }
+    }
+
     /// Returns the aggregated capability mask for the subtree rooted at this node.
     pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
         if self.is_tail() {

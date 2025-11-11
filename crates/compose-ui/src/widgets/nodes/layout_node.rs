@@ -162,6 +162,7 @@ pub struct LayoutNode {
     parent: Cell<Option<NodeId>>,
     // Node's own ID (set by applier after creation)
     id: Cell<Option<NodeId>>,
+    debug_modifiers: Cell<bool>,
 }
 
 impl LayoutNode {
@@ -180,6 +181,7 @@ impl LayoutNode {
             needs_semantics: Cell::new(true), // Semantics snapshot needs initial build
             parent: Cell::new(None),        // No parent initially
             id: Cell::new(None),            // ID set by applier after creation
+            debug_modifiers: Cell::new(false),
         };
         node.set_modifier(modifier);
         node
@@ -201,6 +203,8 @@ impl LayoutNode {
         let mut resolver = move |token: ModifierLocalToken| {
             resolve_modifier_local_from_parent_chain(start_parent, token)
         };
+        self.modifier_chain
+            .set_debug_logging(self.debug_modifiers.get());
         let modifier_local_invalidations = self
             .modifier_chain
             .update_with_resolver(&self.modifier, &mut resolver);
@@ -358,6 +362,15 @@ impl LayoutNode {
         self.modifier_child_capabilities
     }
 
+    pub fn set_debug_modifiers(&mut self, enabled: bool) {
+        self.debug_modifiers.set(enabled);
+        self.modifier_chain.set_debug_logging(enabled);
+    }
+
+    pub fn debug_modifiers_enabled(&self) -> bool {
+        self.debug_modifiers.get()
+    }
+
     pub fn modifier_locals_handle(&self) -> ModifierLocalsHandle {
         self.modifier_chain.modifier_locals_handle()
     }
@@ -430,6 +443,7 @@ impl Clone for LayoutNode {
             needs_semantics: Cell::new(self.needs_semantics.get()),
             parent: Cell::new(self.parent.get()),
             id: Cell::new(None),
+            debug_modifiers: Cell::new(self.debug_modifiers.get()),
         };
         node.sync_modifier_chain();
         node

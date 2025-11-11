@@ -29,7 +29,7 @@ mod weight;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 #[allow(unused_imports)]
-pub use chain::{ModifierChainHandle, ModifierLocalsHandle};
+pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 use compose_foundation::ModifierNodeElement;
 pub use compose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, FocusState, PointerEvent,
@@ -39,6 +39,7 @@ pub use compose_ui_graphics::{
     Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
 };
 use compose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
+#[allow(unused_imports)]
 pub use focus::{FocusDirection, FocusRequester};
 #[allow(unused_imports)]
 pub use local::{modifier_local_of, ModifierLocalKey, ModifierLocalReadScope};
@@ -148,10 +149,17 @@ impl InspectorInfo {
 }
 
 /// Single inspector entry recording a property exposed by a modifier.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InspectorProperty {
     pub name: &'static str,
     pub value: String,
+}
+
+/// Structured inspector payload describing a modifier element.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModifierInspectorRecord {
+    pub name: &'static str,
+    pub properties: Vec<InspectorProperty>,
 }
 
 /// Helper describing the metadata contributed by a modifier factory.
@@ -183,6 +191,13 @@ impl InspectorMetadata {
 
     fn is_empty(&self) -> bool {
         self.info.is_empty()
+    }
+
+    fn to_record(&self) -> ModifierInspectorRecord {
+        ModifierInspectorRecord {
+            name: self.name,
+            properties: self.info.properties().to_vec(),
+        }
     }
 }
 
@@ -256,8 +271,25 @@ impl Modifier {
     where
         F: Fn(&mut SemanticsConfiguration) + 'static,
     {
+        let mut preview = SemanticsConfiguration::default();
+        recorder(&mut preview);
+        let description = preview.content_description.clone();
+        let is_button = preview.is_button;
+        let is_clickable = preview.is_clickable;
+        let metadata = inspector_metadata("semantics", move |info| {
+            if let Some(desc) = &description {
+                info.add_property("contentDescription", desc.clone());
+            }
+            if is_button {
+                info.add_property("isButton", "true");
+            }
+            if is_clickable {
+                info.add_property("isClickable", "true");
+            }
+        });
         let element = SemanticsElement::new(recorder);
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        let modifier =
+            Modifier::from_parts(vec![modifier_element(element)]).with_inspector_metadata(metadata);
         self.then(modifier)
     }
 
@@ -316,6 +348,10 @@ impl Modifier {
 
     pub(crate) fn elements(&self) -> &[DynModifierElement] {
         &self.elements
+    }
+
+    pub(crate) fn inspector_metadata(&self) -> &[InspectorMetadata] {
+        &self.inspector
     }
 
     pub fn total_padding(&self) -> f32 {
@@ -381,6 +417,14 @@ impl Modifier {
 
     pub fn clips_to_bounds(&self) -> bool {
         collect_slices_from_modifier(self).clip_to_bounds()
+    }
+
+    /// Returns structured inspector records for each modifier element.
+    pub fn collect_inspector_records(&self) -> Vec<ModifierInspectorRecord> {
+        self.inspector
+            .iter()
+            .map(|metadata| metadata.to_record())
+            .collect()
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {

@@ -2,7 +2,7 @@
 //!
 //! Reference: /media/huge/composerepo/compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
 
-use super::{inspector_metadata, DimensionConstraint, InspectorMetadata, Modifier};
+use super::{inspector_metadata, DimensionConstraint, Modifier};
 use crate::modifier_nodes::FillElement;
 
 impl Modifier {

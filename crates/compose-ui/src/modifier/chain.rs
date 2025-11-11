@@ -1,18 +1,31 @@
 use compose_foundation::{
-    BasicModifierNodeContext, InvalidationKind, ModifierNode, ModifierNodeChain, NodeCapabilities,
+    BasicModifierNodeContext, InvalidationKind, ModifierNodeChain, NodeCapabilities,
 };
 
 use super::{
     local::ModifierLocalManager, Color, DimensionConstraint, EdgeInsets, GraphicsLayer,
-    LayoutProperties, LayoutWeight, Modifier, ModifierLocalAncestorResolver, ModifierLocalToken,
-    Point, ResolvedModifierLocal, ResolvedModifiers, RoundedCornerShape,
+    LayoutProperties, Modifier, ModifierInspectorRecord, ModifierLocalAncestorResolver,
+    ModifierLocalToken, Point, ResolvedModifierLocal, ResolvedModifiers, RoundedCornerShape,
 };
 use crate::modifier_nodes::{
     AlignmentNode, BackgroundNode, CornerShapeNode, FillDirection, FillNode, GraphicsLayerNode,
     IntrinsicAxis, IntrinsicSizeNode, OffsetNode, PaddingNode, SizeNode, WeightNode,
 };
+use std::any::type_name_of_val;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::OnceLock;
+
+/// Snapshot of a modifier node inside a reconciled chain for debugging & inspector tooling.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModifierChainInspectorNode {
+    pub depth: usize,
+    pub entry_index: Option<usize>,
+    pub type_name: &'static str,
+    pub capabilities: NodeCapabilities,
+    pub aggregate_child_capabilities: NodeCapabilities,
+    pub inspector: Option<ModifierInspectorRecord>,
+}
 
 /// Runtime helper that keeps a [`ModifierNodeChain`] in sync with a [`Modifier`].
 ///
@@ -29,6 +42,8 @@ pub struct ModifierChainHandle {
     capabilities: NodeCapabilities,
     aggregate_child_capabilities: NodeCapabilities,
     modifier_locals: ModifierLocalsHandle,
+    inspector_snapshot: Vec<ModifierChainInspectorNode>,
+    debug_logging: bool,
 }
 
 impl Default for ModifierChainHandle {
@@ -40,6 +55,8 @@ impl Default for ModifierChainHandle {
             capabilities: NodeCapabilities::default(),
             aggregate_child_capabilities: NodeCapabilities::default(),
             modifier_locals: Rc::new(RefCell::new(ModifierLocalManager::new())),
+            inspector_snapshot: Vec::new(),
+            debug_logging: false,
         }
     }
 }
@@ -69,11 +86,19 @@ impl ModifierChainHandle {
             .modifier_locals
             .borrow_mut()
             .sync(&self.chain, resolver);
-        if std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some() {
-            crate::debug::log_modifier_chain(self.chain());
-        }
         self.resolved = self.compute_resolved();
+        self.inspector_snapshot = self.collect_inspector_snapshot(modifier);
+        let should_log = self.debug_logging || global_modifier_debug_flag();
+        if should_log {
+            crate::debug::log_modifier_chain(self.chain(), self.inspector_snapshot());
+            crate::debug::emit_modifier_chain_trace(self.inspector_snapshot());
+        }
         modifier_local_invalidations
+    }
+
+    /// Enables or disables per-handle modifier debug logging.
+    pub fn set_debug_logging(&mut self, enabled: bool) {
+        self.debug_logging = enabled;
     }
 
     /// Returns the modifier node chain for read-only traversal.
@@ -125,6 +150,10 @@ impl ModifierChainHandle {
 
     pub fn modifier_locals_handle(&self) -> ModifierLocalsHandle {
         Rc::clone(&self.modifier_locals)
+    }
+
+    pub fn inspector_snapshot(&self) -> &[ModifierChainInspectorNode] {
+        &self.inspector_snapshot
     }
 
     fn compute_resolved(&self) -> ResolvedModifiers {
@@ -186,6 +215,45 @@ impl ModifierChainHandle {
         }
         resolved
     }
+
+    fn collect_inspector_snapshot(&self, modifier: &Modifier) -> Vec<ModifierChainInspectorNode> {
+        if self.chain.is_empty() {
+            return Vec::new();
+        }
+
+        let mut per_entry: Vec<Option<ModifierInspectorRecord>> = vec![None; self.chain.len()];
+        for (index, metadata) in modifier.inspector_metadata().iter().enumerate() {
+            if index >= per_entry.len() {
+                break;
+            }
+            per_entry[index] = Some(metadata.to_record());
+        }
+
+        let mut snapshot = Vec::new();
+        self.chain.for_each_forward(|node_ref| {
+            let Some(node) = node_ref.node() else {
+                return;
+            };
+            let depth = node_ref.delegate_depth();
+            let entry_index = node_ref.entry_index();
+            let inspector = if depth == 0 {
+                entry_index
+                    .and_then(|idx| per_entry.get_mut(idx))
+                    .and_then(|slot| slot.take())
+            } else {
+                None
+            };
+            snapshot.push(ModifierChainInspectorNode {
+                depth,
+                entry_index,
+                type_name: type_name_of_val(node),
+                capabilities: node_ref.kind_set(),
+                aggregate_child_capabilities: node_ref.aggregate_child_capabilities(),
+                inspector,
+            });
+        });
+        snapshot
+    }
 }
 
 fn apply_size_node(layout: &mut LayoutProperties, node: &SizeNode) {
@@ -237,6 +305,11 @@ fn apply_intrinsic_size_node(layout: &mut LayoutProperties, node: &IntrinsicSize
             layout.height = constraint;
         }
     }
+}
+
+fn global_modifier_debug_flag() -> bool {
+    static ENV_DEBUG: OnceLock<bool> = OnceLock::new();
+    *ENV_DEBUG.get_or_init(|| std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some())
 }
 
 #[cfg(test)]

@@ -1,9 +1,13 @@
 use super::{
-    modifier_local_of, Alignment, Color, ComposeModifier, DimensionConstraint, EdgeInsets,
-    GraphicsLayer, HorizontalAlignment, InspectableModifier, InspectorInfo, Modifier,
-    ModifierChainHandle, ModifierLocalSource, ModifierLocalToken, Point, Size, VerticalAlignment,
+    inspector_metadata, modifier_local_of, Alignment, Color, ComposeModifier, DimensionConstraint,
+    EdgeInsets, GraphicsLayer, HorizontalAlignment, InspectableModifier, InspectorInfo, Modifier,
+    ModifierChainHandle, ModifierLocalSource, ModifierLocalToken, Point, SemanticsConfiguration,
+    Size, VerticalAlignment,
 };
 use crate::modifier_nodes::{AlphaNode, BackgroundNode, ClickableNode, PaddingNode};
+use compose_foundation::{
+    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
+};
 use std::any::TypeId;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -260,6 +264,115 @@ fn inspector_debug_helpers_surface_properties() {
 }
 
 #[test]
+fn collect_inspector_records_include_weight_and_pointer_input_metadata() {
+    let modifier = Modifier::padding(2.0)
+        .then(Modifier::weight_with_fill(3.5, false))
+        .then(Modifier::pointer_input(7u64, |_| async move {}));
+
+    let records = modifier.collect_inspector_records();
+
+    let weight = records
+        .iter()
+        .find(|record| record.name == "weight")
+        .expect("missing weight inspector record");
+    assert!(weight
+        .properties
+        .iter()
+        .any(|prop| prop.name == "weight" && prop.value == 3.5f32.to_string()));
+    assert!(weight
+        .properties
+        .iter()
+        .any(|prop| prop.name == "fill" && prop.value == "false"));
+
+    let pointer = records
+        .iter()
+        .find(|record| record.name == "pointerInput")
+        .expect("missing pointerInput inspector record");
+    assert!(pointer
+        .properties
+        .iter()
+        .any(|prop| prop.name == "keyCount" && prop.value == "1"));
+    assert!(pointer
+        .properties
+        .iter()
+        .any(|prop| prop.name == "handlerId"));
+}
+
+#[test]
+fn semantics_modifier_populates_inspector_metadata() {
+    let modifier = Modifier::empty().semantics(|config: &mut SemanticsConfiguration| {
+        config.content_description = Some("Submit".into());
+        config.is_button = true;
+    });
+
+    let records = modifier.collect_inspector_records();
+    let semantics = records
+        .first()
+        .expect("expected semantics inspector record");
+    assert_eq!(semantics.name, "semantics");
+    assert!(semantics
+        .properties
+        .iter()
+        .any(|prop| prop.name == "contentDescription" && prop.value == "Submit"));
+    assert!(semantics
+        .properties
+        .iter()
+        .any(|prop| prop.name == "isButton" && prop.value == "true"));
+}
+
+#[test]
+fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
+    let modifier = Modifier::padding(4.0).then(
+        Modifier::with_element(TestDelegatingElement)
+            .with_inspector_metadata(inspector_metadata("delegating", |info| {
+                info.add_property("tag", "root")
+            })),
+    );
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+
+    let snapshot = handle.inspector_snapshot();
+    assert!(snapshot.iter().any(|node| node.depth > 0));
+    let padding_entry = snapshot
+        .iter()
+        .find(|node| {
+            node.inspector
+                .as_ref()
+                .map(|record| record.name == "padding")
+                .unwrap_or(false)
+        })
+        .expect("expected padding inspector entry");
+    assert!(padding_entry
+        .capabilities
+        .contains(NodeCapabilities::LAYOUT));
+}
+
+#[test]
+fn modifier_chain_trace_runs_only_when_debug_flag_set() {
+    let modifier = Modifier::padding(1.0);
+    let mut handle = ModifierChainHandle::new();
+    let invocations = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    {
+        let counter = invocations.clone();
+        let _guard = crate::debug::install_modifier_chain_trace(move |_nodes| {
+            *counter.lock().unwrap() += 1;
+        });
+
+        let _ = handle.update(&modifier);
+        assert_eq!(
+            *invocations.lock().unwrap(),
+            0,
+            "trace should be gated by debug flag"
+        );
+
+        handle.set_debug_logging(true);
+        let _ = handle.update(&modifier);
+    }
+
+    assert_eq!(*invocations.lock().unwrap(), 1);
+}
+
+#[test]
 fn modifier_local_consumer_reads_provided_value() {
     let key = modifier_local_of(|| 0);
     let observed = Rc::new(RefCell::new(None));
@@ -341,6 +454,75 @@ fn modifier_local_consumer_reads_from_parent_chain() {
     }
 
     assert_eq!(observed.borrow().as_slice(), &[7]);
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct TestDelegatingElement;
+
+struct TestDelegatingNode {
+    state: NodeState,
+    delegate: TestDelegateLeaf,
+}
+
+impl TestDelegatingNode {
+    fn new() -> Self {
+        let node = Self {
+            state: NodeState::new(),
+            delegate: TestDelegateLeaf::new(),
+        };
+        node.state
+            .set_capabilities(NodeCapabilities::LAYOUT | NodeCapabilities::MODIFIER_LOCALS);
+        node.delegate
+            .node_state()
+            .set_capabilities(NodeCapabilities::LAYOUT);
+        node
+    }
+}
+
+impl DelegatableNode for TestDelegatingNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for TestDelegatingNode {
+    fn for_each_delegate<'a>(&'a self, visitor: &mut dyn FnMut(&'a dyn ModifierNode)) {
+        visitor(&self.delegate);
+    }
+}
+
+struct TestDelegateLeaf {
+    state: NodeState,
+}
+
+impl TestDelegateLeaf {
+    fn new() -> Self {
+        Self {
+            state: NodeState::new(),
+        }
+    }
+}
+
+impl DelegatableNode for TestDelegateLeaf {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for TestDelegateLeaf {}
+
+impl ModifierNodeElement for TestDelegatingElement {
+    type Node = TestDelegatingNode;
+
+    fn create(&self) -> Self::Node {
+        TestDelegatingNode::new()
+    }
+
+    fn update(&self, _node: &mut Self::Node) {}
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
 }
 
 #[test]

@@ -1,5 +1,4 @@
-use super::Modifier;
-use super::PointerEvent;
+use super::{inspector_metadata, Modifier, PointerEvent};
 use compose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
     NodeState, PointerInputNode,
@@ -27,7 +26,15 @@ impl Modifier {
     {
         let element =
             PointerInputElement::new(vec![KeyToken::new(&key)], pointer_input_handler(handler));
-        Self::with_element(element)
+        let key_count = element.key_count();
+        let handler_id = element.handler_id();
+        Self::with_element(element).with_inspector_metadata(inspector_metadata(
+            "pointerInput",
+            move |info| {
+                info.add_property("keyCount", key_count.to_string());
+                info.add_property("handlerId", handler_id.to_string());
+            },
+        ))
     }
 }
 
@@ -62,6 +69,14 @@ impl PointerInputElement {
             handler,
             handler_id,
         }
+    }
+
+    fn key_count(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn handler_id(&self) -> u64 {
+        self.handler_id
     }
 }
 

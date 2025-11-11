@@ -5,7 +5,6 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 ---
 
 ## Current Gaps (Compose-RS)
-- Diagnostics exist (`Modifier::fmt`, `debug::log_modifier_chain`, `COMPOSE_DEBUG_MODIFIERS`), but we still lack parity tooling such as Kotlin's inspector strings, capability dumps with delegate depth, per-node tracing toggles, and focused tracing hooks used by focus/pointer stacks.
 - Node capability dispatch still leans on the optional `as_*` downcasts; we need Kotlin’s mask-driven iteration and invalidation routing so DRAW-only changes stop forcing layout.
 
 ## Jetpack Compose Reference Anchors
@@ -18,7 +17,7 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 - `ModifierNodeChain` now stores safe sentinel head/tail nodes and aggregate capability masks without `unsafe`, enabling deterministic traversal order and `COMPOSE_DEBUG_MODIFIERS` dumps.
 - Modifier locals graduated to a Kotlin-style manager: providers/consumers stay registered per chain, invalidations return from `ModifierChainHandle`, layout nodes resolve ancestor values via a registry, and regression tests now cover overrides + ancestor propagation.
 - Layout nodes expose modifier-local data to ancestors without raw pointers: `ModifierChainHandle` shares a `ModifierLocalsHandle`, `LayoutNode` updates a pointer-free registry entry, and `resolve_modifier_local_from_parent_chain` now mirrors Kotlin's `ModifierLocalManager` traversal while staying completely safe.
-- Diagnostics improved: `Modifier` implements `Display`, `compose_ui::debug::log_modifier_chain` enumerates nodes/capabilities, and DEBUG env flags print chains after reconciliation.
+- **Diagnostics & inspector parity leveled up:** `LayoutNode`/`SubcomposeLayoutNode` now opt into per-chain logging, `ModifierChainHandle` captures structured inspector snapshots (names, args, delegate depth, capability masks), `compose_ui::debug::{format,log}_modifier_chain` mirrors Kotlin’s `NodeChain#trace`, and a new `install_modifier_chain_trace` hook lets pointer/focus stacks subscribe without enabling global flags.
 - Core modifier factories (`padding`, `background`, `draw*`, `clipToBounds`, `pointerInput`, `clickable`) are node-backed, and pointer input runs on coroutine-driven scaffolding mirroring Kotlin. Renderers and pointer dispatch now operate exclusively on reconciled node slices.
 - `ModifierNodeChain` now mirrors Kotlin's delegate semantics: every node exposes parent/child links, delegate stacks feed the traversal helpers, aggregate capability masks propagate through delegates, and tests cover ordering, sentinel wiring, and capability short-circuiting without any `unsafe`.
 - Runtime consumers (modifier locals, pointer input, semantics helpers, diagnostics, and resolver pipelines) now use the delegate-aware traversal helpers exclusively; the legacy iterator APIs were removed and tests cover delegated capability discovery.
@@ -126,16 +125,9 @@ Always cross-check behavior against the Kotlin sources under `/media/huge/compos
 
    * Layout nodes maintain a registry of living parents so modifier-local consumers can resolve ancestors exactly like Kotlin’s `visitAncestors`, with capability short-circuiting tied to `modifier_child_capabilities`.
 
-3. **Make debug toggling less global**
+3. **(✅) Make debug toggling less global**
 
-   * **Goal:** avoid “env var = everything logs.”
-   * **Actions:**
-
-     * Keep `COMPOSE_DEBUG_MODIFIERS` for now, but add a per-node switch the layout node can set (`layout_node.set_debug_modifiers(true)`).
-     * Route chain logging through that.
-   * **Acceptance:**
-
-     * You can turn on modifier-debug for one node without spamming the whole tree.
+   * Per-node flags now live on `LayoutNode`/`SubcomposeLayoutNode`, those feed `ModifierChainHandle::set_debug_logging`, and `compose_ui::debug::log_modifier_chain` renders the structured snapshots only when a node opt-ins or the env var is set.
 
 ---
 

@@ -1,7 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use compose_foundation::{ModifierNode, ModifierNodeChain, NodeCapabilities, PointerEvent};
+use compose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
 
 use crate::draw::DrawCommand;
 use crate::modifier::Modifier;

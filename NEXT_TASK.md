@@ -1,58 +1,47 @@
-# Next Task: Modifier Diagnostics & Inspector Parity
+# Next Task: Capability-Mask Dispatch & Targeted Invalidations
 
 ## Context
-All modifiers are now node-backed, `ModifierState` has been removed, and every runtime subsystem pulls data from reconciled node chains. The remaining parity gap versus Jetpack Compose is diagnostic tooling: Kotlin exposes rich inspector strings, delegate-depth dumps, and targeted tracing hooks (e.g., `Modifier.inspectable`, `ModifierNodeElement#inspectorInfo`, `NodeChain#trace`). Compose-RS currently has a single global switch (`COMPOSE_DEBUG_MODIFIERS`) that dumps every chain, which makes focused debugging impractical and leaves devtools without structured data.
+Diagnostics, inspector metadata, and per-node debug toggles now match Jetpack Compose’s `Modifier.inspectable` / `NodeChain#trace` behavior, so devtools can reason about individual chains again. The remaining behavioral gap is runtime dispatch: Compose-RS still leans on the legacy `as_*` downcasts and treats every draw invalidation as a layout dirty flag. Kotlin’s `NodeChain` routes work purely through capability masks (see `androidx/compose/ui/Modifier.kt`, `ModifierNodeElement.kt`, and `NodeChain.kt`) so DRAW-only mutations never force layout, pointer/focus traversals short-circuit before hitting unrelated nodes, and third-party nodes don’t need to override opt-in “shortcut” helpers.
 
 ## Current State
-- `Modifier::fmt` and `compose_ui::debug::log_modifier_chain` emit textual dumps, but they lack capability masks, delegate depth, and inspector metadata beyond element names.
-- Debug logging is all-or-nothing: setting `COMPOSE_DEBUG_MODIFIERS=1` prints every chain each reconciliation. There is no per-layout-node toggle or tracing hook downstream systems can use.
-- `InspectorMetadata` exists in Rust but only stores arbitrary properties; we do not expose a structured API comparable to Kotlin’s `Modifier.inspectable` utilities or Android Studio’s “Modifier Inspector”.
-- Pointer/focus stacks would benefit from targeted tracing (similar to Kotlin’s `PointerInputModifierNode#debug` routes) but there is no plumbing for enabling those on a single node chain.
+- `ModifierNodeChain::visit_*` exposes capability masks, but most runtime call sites (`draw_nodes`, pointer input, semantics, focus) still probe each entry with `as_*` helpers, meaning nodes must implement optional trait adapters to participate.
+- `ModifierChainHandle::take_invalidations` only emits coarse `InvalidationKind`s; `LayoutNode::dispatch_modifier_invalidations` still calls `mark_needs_measure()` even when a draw-only node updates.
+- Renderer and pointer stacks lack a `mark_needs_redraw()` / `mark_needs_pointer_repass()` path, so all invalidations bubble through layout dirtiness.
+- Kotlin’s `NodeKind` masks allow delegation depth filtering (e.g., skip pointer nodes under a draw-only delegate) while we eagerly visit every node, even when the aggregate mask shows the capability is absent.
 
 ## Goals
-1. **Per-node debug toggles** — Allow layout/render nodes to opt-in to modifier logging/tracing without enabling global environment variables.
-2. **Inspector parity** — Surface Kotlin-style inspector strings and structured metadata per modifier element so devtools (or CLI tooling) can display friendly names/arguments.
-3. **Capability-aware chain dumps** — Expand the debug output to include delegate depth, capability masks, modifier-local providers, semantics/focus flags, and resolved inspector info, matching Jetpack Compose’s `NodeChain#trace` output.
+1. **Mask-driven traversal** — Convert every runtime visitor (draw, pointer input, focus, semantics, modifier locals) to use `NodeCapabilities`/aggregate masks as the primary filter so nodes without `as_*` helpers still run.
+2. **Targeted invalidation routing** — Track DRAW vs LAYOUT invalidations separately (e.g., `LayoutNode::mark_needs_redraw`) so draw-only changes no longer force measure/layout and renderer queues get precise dirties.
+3. **Public surface polish** — Ensure modifier authors no longer implement `as_draw_node`/`as_pointer_input_node`; docs/tests should reference capabilities instead.
 
 ## Jetpack Compose Reference
-- `Modifier.kt` & `Modifier.inspectable` helpers (`androidx/compose/ui/Modifier.kt`)
-- `ModifierInspector.kt` (`androidx/compose/ui/platform`)
-- `NodeChain.kt#trace` and `DelegatableNode.kt` for delegate-depth dumps
-- Devtools hooks under `/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/InspectableValue.kt`
+- `androidx/compose/ui/Modifier.kt` (`Modifier.Element`) & `ModifierNodeElement.kt` for capability-driven dispatch contracts.
+- `androidx/compose/ui/node/NodeChain.kt` and `DelegatableNode.kt` for mask-filtered traversal + invalidation routing.
+- `androidx/compose/ui/platform/AndroidComposeView#invalidateLayers` for DRAW-only invalidation handling.
 
 ## Implementation Plan
 
-### Phase 1 — Node-Scoped Debug Flags
-1. Add an opt-in flag on `LayoutNode` / `SubcomposeLayoutNodeInner` (e.g., `debug_modifiers: bool`).
-2. Plumb that flag through `ModifierChainHandle::update_with_resolver` so chain logging only runs when either the env var is set **or** the node requested debugging.
-3. Expose a public-facing toggle (temporary API under `compose_ui::debug` or `LayoutNodeHandle::set_debug_modifiers(bool)`) so tests/tools can enable debugging per node.
-4. Tests: enable the flag for a single node, ensure only that node’s chain prints/logs.
+### Phase 1 — Mask-Driven Visitors
+1. Extend `ModifierNodeChain` helpers with ergonomics similar to Kotlin’s `visitAncestors/descendants` (delegate depth already exists).
+2. Update pointer input, focus, semantics, draw, and modifier-local collectors to call `for_each_forward_matching(mask, …)` instead of `as_*` helpers.
+3. Deprecate the `ModifierNode::as_*` shortcuts (leave no-op default impls for compat) and ensure built-in nodes rely solely on `NodeCapabilities`.
+4. Tests: craft fake nodes that set `NodeCapabilities::DRAW` without overriding `as_draw_node` and assert draw traversal still hits them; same for pointer/focus.
 
-### Phase 2 — Structured Inspector Metadata
-1. Introduce a `ModifierInspectorRecord` struct mirroring Kotlin’s `InspectorInfo` (name + argument list).
-2. Extend `ModifierChainHandle::compute_resolved` (or a new helper) to fold the reconciled chain and collect inspector info, including delegate depth and capability masks per element.
-3. Provide an API such as `Modifier::collect_inspector_info()` or `debug::modifier_chain_inspector(handle)` returning structured data (JSON-friendly).
-4. Update existing modifiers to record richer metadata (weights, alignments, graphics layers, pointerInput keys, semantics roles) using helper functions similar to Kotlin’s `inspectable`.
-5. Tests: assert inspector output for representative modifiers (padding, weight, pointerInput) matches expected names/values.
+### Phase 2 — Targeted Invalidation Routing
+1. Teach `ModifierChainHandle`/`BasicModifierNodeContext` to record which capability triggered `InvalidationKind::Draw`, `::PointerInput`, etc.
+2. Add `LayoutNode::mark_needs_redraw()` (and equivalent piping into `compose_ui::renderer`) so draw invalidations only enqueue render work; keep layout dirtiness untouched.
+3. Ensure pointer/focus invalidations skip layout dirties entirely and instead notify their respective managers.
+4. Tests: mutate a draw-only node and assert `needs_measure` stays false while render dirty flag flips; pointer/focus tests should assert no layout dirties occur.
 
-### Phase 3 — Capability & Tracing Dumps
-1. Add a reusable formatter (e.g., `debug::format_modifier_chain`) that prints:
-   - delegate depth (head → delegates)
-   - capability mask per entry (LAYOUT/DRAW/etc.)
-   - inspector metadata
-   - modifier-local providers / semantics / focus flags
-2. Hook the formatter into both the global env var path and the node-scoped debug toggle introduced in Phase 1.
-3. Provide a lightweight tracing hook (closure or channel) so pointer/focus subsystems can subscribe to chain events similar to Kotlin’s `NodeChain#trace`.
-4. Tests: create fake chains with nested delegates and assert the formatter output includes depth/capabilities; add a regression test ensuring DRAW-only nodes appear in the dump with their masks.
+### Phase 3 — Public Surface Cleanup
+1. Remove documentation references to `as_draw_node`/friends and update examples to describe capability masks.
+2. Audit `ModifierNodeElement::capabilities()` implementations to ensure every built-in node advertises the correct bits.
+3. Provide a migration note (doc + changelog) telling downstream authors to set `NodeCapabilities` rather than override shortcut methods.
+4. Tests: ensure `cargo doc` examples compile with the new API, and add regression tests covering third-party nodes that only set capability bits.
 
 ## Acceptance Criteria
-- `LayoutNode` / `SubcomposeLayoutNode` can log modifier chains independently of other nodes.
-- Inspector metadata lists modifier names and arguments (e.g., `padding(start=8.0)`), matching Kotlin semantics.
-- Chain dumps show delegate depth and capability masks; DRAW-only updates no longer require global logging to debug.
-- Pointer/focus stacks can opt into tracing a single node chain for debugging.
-- `cargo test` (workspace) passes.
-
-## Notes
-- Keep the new APIs `#[cfg(feature = "debug")]` if needed, but default to no-std-friendly data structures.
-- Avoid `unsafe`; rely on existing node state/capability infrastructure.
-- Prefer structured data over formatted strings so future devtools integrations can re-use it.
+- Every runtime traversal (draw, pointer, focus, semantics, modifier locals) depends on `NodeCapabilities` masks rather than optional `as_*` helpers.
+- DRAW-only invalidations flow through a dedicated `mark_needs_redraw` path without toggling measure/layout flags.
+- Pointer/focus invalidations no longer bubble through layout dirtiness.
+- All built-in modifier nodes advertise accurate capability masks, and documentation reflects the new contract.
+- `cargo test` (workspace) passes. 
