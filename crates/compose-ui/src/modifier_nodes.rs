@@ -399,20 +399,71 @@ impl ModifierNodeElement for CornerShapeElement {
 // Size Modifier Node
 // ============================================================================
 
-/// Node that enforces a specific size on its content.
+/// Node that enforces size constraints on its content.
+///
+/// Matches Kotlin: `SizeNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
 #[derive(Debug)]
 pub struct SizeNode {
-    width: Option<f32>,
-    height: Option<f32>,
+    min_width: Option<f32>,
+    max_width: Option<f32>,
+    min_height: Option<f32>,
+    max_height: Option<f32>,
+    enforce_incoming: bool,
     state: NodeState,
 }
 
 impl SizeNode {
-    pub fn new(width: Option<f32>, height: Option<f32>) -> Self {
+    pub fn new(
+        min_width: Option<f32>,
+        max_width: Option<f32>,
+        min_height: Option<f32>,
+        max_height: Option<f32>,
+        enforce_incoming: bool,
+    ) -> Self {
         Self {
-            width,
-            height,
+            min_width,
+            max_width,
+            min_height,
+            max_height,
+            enforce_incoming,
             state: NodeState::new(),
+        }
+    }
+
+    /// Helper to build target constraints from element parameters
+    fn target_constraints(&self) -> Constraints {
+        let max_width = self.max_width.map(|v| v.max(0.0)).unwrap_or(f32::INFINITY);
+        let max_height = self.max_height.map(|v| v.max(0.0)).unwrap_or(f32::INFINITY);
+
+        let min_width = self
+            .min_width
+            .map(|v| {
+                let clamped = v.clamp(0.0, max_width);
+                if clamped == f32::INFINITY {
+                    0.0
+                } else {
+                    clamped
+                }
+            })
+            .unwrap_or(0.0);
+
+        let min_height = self
+            .min_height
+            .map(|v| {
+                let clamped = v.clamp(0.0, max_height);
+                if clamped == f32::INFINITY {
+                    0.0
+                } else {
+                    clamped
+                }
+            })
+            .unwrap_or(0.0);
+
+        Constraints {
+            min_width,
+            max_width,
+            min_height,
+            max_height,
         }
     }
 }
@@ -436,67 +487,197 @@ impl LayoutModifierNode for SizeNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> Size {
-        // Override constraints with explicit sizes if specified
-        let width = self
-            .width
-            .map(|value| value.clamp(constraints.min_width, constraints.max_width));
-        let height = self
-            .height
-            .map(|value| value.clamp(constraints.min_height, constraints.max_height));
+        let target = self.target_constraints();
 
-        let inner_constraints = Constraints {
-            min_width: width.unwrap_or(constraints.min_width),
-            max_width: width.unwrap_or(constraints.max_width),
-            min_height: height.unwrap_or(constraints.min_height),
-            max_height: height.unwrap_or(constraints.max_height),
+        let wrapped_constraints = if self.enforce_incoming {
+            // Constrain target constraints by incoming constraints
+            Constraints {
+                min_width: target.min_width.max(constraints.min_width).min(constraints.max_width),
+                max_width: target
+                    .max_width
+                    .min(constraints.max_width)
+                    .max(constraints.min_width),
+                min_height: target
+                    .min_height
+                    .max(constraints.min_height)
+                    .min(constraints.max_height),
+                max_height: target
+                    .max_height
+                    .min(constraints.max_height)
+                    .max(constraints.min_height),
+            }
+        } else {
+            // Required size: use target, but preserve incoming if target is unspecified
+            let resolved_min_width = if self.min_width.is_some() {
+                target.min_width
+            } else {
+                constraints.min_width.min(target.max_width)
+            };
+            let resolved_max_width = if self.max_width.is_some() {
+                target.max_width
+            } else {
+                constraints.max_width.max(target.min_width)
+            };
+            let resolved_min_height = if self.min_height.is_some() {
+                target.min_height
+            } else {
+                constraints.min_height.min(target.max_height)
+            };
+            let resolved_max_height = if self.max_height.is_some() {
+                target.max_height
+            } else {
+                constraints.max_height.max(target.min_height)
+            };
+
+            Constraints {
+                min_width: resolved_min_width,
+                max_width: resolved_max_width,
+                min_height: resolved_min_height,
+                max_height: resolved_max_height,
+            }
         };
 
-        // Measure wrapped content with size constraints
-        let placeable = measurable.measure(inner_constraints);
+        let placeable = measurable.measure(wrapped_constraints);
         let measured_width = placeable.width();
         let measured_height = placeable.height();
 
-        // Return the specified size or the measured size when not overridden
+        // Return the target size when both min==max (fixed size), otherwise return measured size
+        let result_width = if self.min_width.is_some()
+            && self.max_width.is_some()
+            && self.min_width == self.max_width
+        {
+            target.min_width
+        } else {
+            measured_width
+        };
+
+        let result_height = if self.min_height.is_some()
+            && self.max_height.is_some()
+            && self.min_height == self.max_height
+        {
+            target.min_height
+        } else {
+            measured_height
+        };
+
         Size {
-            width: width.unwrap_or(measured_width),
-            height: height.unwrap_or(measured_height),
+            width: result_width,
+            height: result_height,
         }
     }
 
-    fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.width.unwrap_or(0.0)
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        let target = self.target_constraints();
+        if target.min_width == target.max_width && target.max_width != f32::INFINITY {
+            target.max_width
+        } else {
+            let child_height = if self.enforce_incoming {
+                height
+            } else {
+                height.clamp(target.min_height, target.max_height)
+            };
+            measurable
+                .min_intrinsic_width(child_height)
+                .clamp(target.min_width, target.max_width)
+        }
     }
 
-    fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.width.unwrap_or(f32::INFINITY)
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        let target = self.target_constraints();
+        if target.min_width == target.max_width && target.max_width != f32::INFINITY {
+            target.max_width
+        } else {
+            let child_height = if self.enforce_incoming {
+                height
+            } else {
+                height.clamp(target.min_height, target.max_height)
+            };
+            measurable
+                .max_intrinsic_width(child_height)
+                .clamp(target.min_width, target.max_width)
+        }
     }
 
-    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.height.unwrap_or(0.0)
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        let target = self.target_constraints();
+        if target.min_height == target.max_height && target.max_height != f32::INFINITY {
+            target.max_height
+        } else {
+            let child_width = if self.enforce_incoming {
+                width
+            } else {
+                width.clamp(target.min_width, target.max_width)
+            };
+            measurable
+                .min_intrinsic_height(child_width)
+                .clamp(target.min_height, target.max_height)
+        }
     }
 
-    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.height.unwrap_or(f32::INFINITY)
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        let target = self.target_constraints();
+        if target.min_height == target.max_height && target.max_height != f32::INFINITY {
+            target.max_height
+        } else {
+            let child_width = if self.enforce_incoming {
+                width
+            } else {
+                width.clamp(target.min_width, target.max_width)
+            };
+            measurable
+                .max_intrinsic_height(child_width)
+                .clamp(target.min_height, target.max_height)
+        }
     }
 }
 
 /// Element that creates and updates size nodes.
+///
+/// Matches Kotlin: `SizeElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
 #[derive(Debug, Clone, PartialEq)]
 pub struct SizeElement {
-    width: Option<f32>,
-    height: Option<f32>,
+    min_width: Option<f32>,
+    max_width: Option<f32>,
+    min_height: Option<f32>,
+    max_height: Option<f32>,
+    enforce_incoming: bool,
 }
 
 impl SizeElement {
     pub fn new(width: Option<f32>, height: Option<f32>) -> Self {
-        Self { width, height }
+        Self {
+            min_width: width,
+            max_width: width,
+            min_height: height,
+            max_height: height,
+            enforce_incoming: true,
+        }
+    }
+
+    pub fn with_constraints(
+        min_width: Option<f32>,
+        max_width: Option<f32>,
+        min_height: Option<f32>,
+        max_height: Option<f32>,
+        enforce_incoming: bool,
+    ) -> Self {
+        Self {
+            min_width,
+            max_width,
+            min_height,
+            max_height,
+            enforce_incoming,
+        }
     }
 }
 
 impl Hash for SizeElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_option_f32(state, self.width);
-        hash_option_f32(state, self.height);
+        hash_option_f32(state, self.min_width);
+        hash_option_f32(state, self.max_width);
+        hash_option_f32(state, self.min_height);
+        hash_option_f32(state, self.max_height);
+        self.enforce_incoming.hash(state);
     }
 }
 
@@ -504,13 +685,27 @@ impl ModifierNodeElement for SizeElement {
     type Node = SizeNode;
 
     fn create(&self) -> Self::Node {
-        SizeNode::new(self.width, self.height)
+        SizeNode::new(
+            self.min_width,
+            self.max_width,
+            self.min_height,
+            self.max_height,
+            self.enforce_incoming,
+        )
     }
 
     fn update(&self, node: &mut Self::Node) {
-        if node.width != self.width || node.height != self.height {
-            node.width = self.width;
-            node.height = self.height;
+        if node.min_width != self.min_width
+            || node.max_width != self.max_width
+            || node.min_height != self.min_height
+            || node.max_height != self.max_height
+            || node.enforce_incoming != self.enforce_incoming
+        {
+            node.min_width = self.min_width;
+            node.max_width = self.max_width;
+            node.min_height = self.min_height;
+            node.max_height = self.max_height;
+            node.enforce_incoming = self.enforce_incoming;
         }
     }
 
@@ -1060,6 +1255,298 @@ impl ModifierNodeElement for DrawCommandElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::DRAW
+    }
+}
+
+// ============================================================================
+// Offset Modifier Node
+// ============================================================================
+
+/// Node that offsets its content by a fixed (x, y) amount.
+///
+/// Matches Kotlin: `OffsetNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Offset.kt
+#[derive(Debug)]
+pub struct OffsetNode {
+    x: f32,
+    y: f32,
+    rtl_aware: bool,
+    state: NodeState,
+}
+
+impl OffsetNode {
+    pub fn new(x: f32, y: f32, rtl_aware: bool) -> Self {
+        Self {
+            x,
+            y,
+            rtl_aware,
+            state: NodeState::new(),
+        }
+    }
+
+    pub fn offset(&self) -> Point {
+        Point { x: self.x, y: self.y }
+    }
+
+    pub fn rtl_aware(&self) -> bool {
+        self.rtl_aware
+    }
+}
+
+impl DelegatableNode for OffsetNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for OffsetNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(compose_foundation::InvalidationKind::Layout);
+    }
+}
+
+impl LayoutModifierNode for OffsetNode {
+    fn measure(
+        &mut self,
+        _context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> Size {
+        // Offset doesn't affect measurement, just placement
+        let placeable = measurable.measure(constraints);
+        Size {
+            width: placeable.width(),
+            height: placeable.height(),
+        }
+    }
+
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        measurable.min_intrinsic_width(height)
+    }
+
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        measurable.max_intrinsic_width(height)
+    }
+
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        measurable.min_intrinsic_height(width)
+    }
+
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        measurable.max_intrinsic_height(width)
+    }
+}
+
+/// Element that creates and updates offset nodes.
+///
+/// Matches Kotlin: `OffsetElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Offset.kt
+#[derive(Debug, Clone, PartialEq)]
+pub struct OffsetElement {
+    x: f32,
+    y: f32,
+    rtl_aware: bool,
+}
+
+impl OffsetElement {
+    pub fn new(x: f32, y: f32, rtl_aware: bool) -> Self {
+        Self { x, y, rtl_aware }
+    }
+}
+
+impl Hash for OffsetElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f32_value(state, self.x);
+        hash_f32_value(state, self.y);
+        self.rtl_aware.hash(state);
+    }
+}
+
+impl ModifierNodeElement for OffsetElement {
+    type Node = OffsetNode;
+
+    fn create(&self) -> Self::Node {
+        OffsetNode::new(self.x, self.y, self.rtl_aware)
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if node.x != self.x || node.y != self.y || node.rtl_aware != self.rtl_aware {
+            node.x = self.x;
+            node.y = self.y;
+            node.rtl_aware = self.rtl_aware;
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
+    }
+}
+
+// ============================================================================
+// Fill Modifier Node
+// ============================================================================
+
+/// Direction for fill modifiers (horizontal, vertical, or both).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FillDirection {
+    Horizontal,
+    Vertical,
+    Both,
+}
+
+/// Node that fills the maximum available space in one or both dimensions.
+///
+/// Matches Kotlin: `FillNode` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
+#[derive(Debug)]
+pub struct FillNode {
+    direction: FillDirection,
+    fraction: f32,
+    state: NodeState,
+}
+
+impl FillNode {
+    pub fn new(direction: FillDirection, fraction: f32) -> Self {
+        Self {
+            direction,
+            fraction,
+            state: NodeState::new(),
+        }
+    }
+
+    pub fn direction(&self) -> FillDirection {
+        self.direction
+    }
+
+    pub fn fraction(&self) -> f32 {
+        self.fraction
+    }
+}
+
+impl DelegatableNode for FillNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for FillNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(compose_foundation::InvalidationKind::Layout);
+    }
+}
+
+impl LayoutModifierNode for FillNode {
+    fn measure(
+        &mut self,
+        _context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> Size {
+        let (min_width, max_width) = if self.direction != FillDirection::Vertical
+            && constraints.max_width != f32::INFINITY
+        {
+            let width = (constraints.max_width * self.fraction)
+                .round()
+                .clamp(constraints.min_width, constraints.max_width);
+            (width, width)
+        } else {
+            (constraints.min_width, constraints.max_width)
+        };
+
+        let (min_height, max_height) = if self.direction != FillDirection::Horizontal
+            && constraints.max_height != f32::INFINITY
+        {
+            let height = (constraints.max_height * self.fraction)
+                .round()
+                .clamp(constraints.min_height, constraints.max_height);
+            (height, height)
+        } else {
+            (constraints.min_height, constraints.max_height)
+        };
+
+        let fill_constraints = Constraints {
+            min_width,
+            max_width,
+            min_height,
+            max_height,
+        };
+
+        let placeable = measurable.measure(fill_constraints);
+        Size {
+            width: placeable.width(),
+            height: placeable.height(),
+        }
+    }
+
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        measurable.min_intrinsic_width(height)
+    }
+
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        measurable.max_intrinsic_width(height)
+    }
+
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        measurable.min_intrinsic_height(width)
+    }
+
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        measurable.max_intrinsic_height(width)
+    }
+}
+
+/// Element that creates and updates fill nodes.
+///
+/// Matches Kotlin: `FillElement` in foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
+#[derive(Debug, Clone, PartialEq)]
+pub struct FillElement {
+    direction: FillDirection,
+    fraction: f32,
+}
+
+impl FillElement {
+    pub fn width(fraction: f32) -> Self {
+        Self {
+            direction: FillDirection::Horizontal,
+            fraction,
+        }
+    }
+
+    pub fn height(fraction: f32) -> Self {
+        Self {
+            direction: FillDirection::Vertical,
+            fraction,
+        }
+    }
+
+    pub fn size(fraction: f32) -> Self {
+        Self {
+            direction: FillDirection::Both,
+            fraction,
+        }
+    }
+}
+
+impl Hash for FillElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.direction.hash(state);
+        hash_f32_value(state, self.fraction);
+    }
+}
+
+impl ModifierNodeElement for FillElement {
+    type Node = FillNode;
+
+    fn create(&self) -> Self::Node {
+        FillNode::new(self.direction, self.fraction)
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        if node.direction != self.direction || node.fraction != self.fraction {
+            node.direction = self.direction;
+            node.fraction = self.fraction;
+        }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
     }
 }
 

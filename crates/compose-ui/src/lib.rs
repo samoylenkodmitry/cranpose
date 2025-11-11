@@ -34,7 +34,8 @@ pub use modifier::{
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
-    CornerShapeElement, CornerShapeNode, PaddingElement, PaddingNode, SizeElement, SizeNode,
+    CornerShapeElement, CornerShapeNode, FillDirection, FillElement, FillNode, OffsetElement,
+    OffsetNode, PaddingElement, PaddingNode, SizeElement, SizeNode,
 };
 pub use primitives::{
     Box, BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,

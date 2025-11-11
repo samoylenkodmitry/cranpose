@@ -5,7 +5,8 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 ---
 
 ## Current Gaps (Compose-RS)
-- `Modifier` is still an Rc-backed builder with cached layout/draw state for legacy APIs. Renderers now read reconciled node slices, but `ModifierState` continues to provide padding/layout caches and must be removed once every factory is node-backed.
+- `ModifierState` still exists for backward compatibility but is now redundant: all core layout modifiers (`offset`, `size`, `fill`, `padding`) are fully node-backed. The struct must be removed and `compute_resolved()` made purely node-driven.
+- Weight and alignment modifiers still use legacy `ModifierState` caching and need migration to element-backed nodes.
 - Diagnostics exist (`Modifier::fmt`, `debug::log_modifier_chain`, `COMPOSE_DEBUG_MODIFIERS`), but we still lack parity tooling such as Kotlin's inspector strings, capability dumps with delegate depth, per-node tracing toggles, and focused tracing hooks used by focus/pointer stacks.
 
 ## Jetpack Compose Reference Anchors
@@ -24,6 +25,7 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 - Runtime consumers (modifier locals, pointer input, semantics helpers, diagnostics, and resolver pipelines) now use the delegate-aware traversal helpers exclusively; the legacy iterator APIs were removed and tests cover delegated capability discovery.
 - **Semantics tree is now fully modifier-driven:** `SemanticsOwner` caches configurations by `NodeId`, `build_semantics_node` derives roles/actions exclusively from `SemanticsConfiguration` flags, semantics dirty flag is independent of layout, and capability-filtered traversal respects delegate depth. `RuntimeNodeMetadata` removed from the semantics extraction path.
 - **Focus chain parity achieved:** `FocusTargetNode` and `FocusRequesterNode` implement full `ModifierNode` lifecycle, focus traversal uses `NodeCapabilities::FOCUS` with delegate-aware visitors (`find_parent_focus_target`, `find_first_focus_target`), `FocusManager` tracks state without unsafe code, focus invalidations are independent of layout/draw, and all 6 tests pass covering lifecycle, callbacks, chain integration, and state predicates.
+- **✅ Layout modifier migration complete:** `OffsetElement`/`OffsetNode` (offset.rs), `FillElement`/`FillNode` (fill.rs), and enhanced `SizeElement`/`SizeNode` now provide full 1:1 parity with Kotlin's foundation-layout modifiers. All three implement `LayoutModifierNode` with proper `measure()`, intrinsic measurement support, and `enforce_incoming` constraint handling. Code is organized into separate files (offset.rs, fill.rs, size.rs). All 118 tests pass ✅.
 
 ## Migration Plan
 1. **Mirror the `Modifier` data model (Kotlin: `Modifier.kt`)**  
@@ -47,11 +49,13 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
    - ✅ `SemanticsOwner` caches `SemanticsConfiguration` per node, lazily computes on access, and supports invalidation.
    - ✅ `build_semantics_node` derives roles/actions from configuration flags (not widget types), respects capability masks, and clears semantics dirty flags.
    - ✅ Tests cover caching, role synthesis, multiple modifier merging, and semantics-only updates.
-3. **Modifier factory audit & `ModifierState` removal**
-   - Audit every `Modifier` factory to ensure it's fully node-backed (currently: `padding`, `background`, `draw*`, `clipToBounds`, `pointerInput`, `clickable`, `focusTarget`, `semantics` are done).
-   - Migrate remaining factories (`offset`, `size`, `weight`, alignment helpers, intrinsic size modifiers) to use element-backed nodes.
-   - Remove `ModifierState` struct once all factories operate exclusively through reconciled node chains.
-   - Update `Modifier::resolved_modifiers()` to build from nodes only, eliminating legacy cache consultation.
+3. **(✅) Layout modifier node-backed migration**
+   - ✅ All core layout modifiers are now node-backed: `padding`, `background`, `draw*`, `clipToBounds`, `pointerInput`, `clickable`, `focusTarget`, `semantics`, **`offset`, `size`, `fill`**.
+   - ✅ `OffsetNode` implements RTL-aware offset with proper `LayoutModifierNode` measure().
+   - ✅ `FillNode` handles fillMaxWidth/Height/Size with fraction support.
+   - ✅ `SizeNode` enhanced with min/max constraints and `enforce_incoming` flag matching Kotlin's SizeElement.
+   - **Remaining:** Migrate `weight` and alignment modifiers, then remove `ModifierState` struct entirely.
+   - **Remaining:** Update `Modifier::resolved_modifiers()` to build from nodes only, eliminating legacy cache consultation.
 4. **Enhanced diagnostics & inspector parity**
    - Extend debugging helpers (`Modifier::to_string()`, chain dumps) to include delegate depth, modifier locals provided, semantics/focus flags, and capability masks.
    - Port Kotlin's inspector strings and per-node tracing (`NodeChain#trace`) so modifier/focus/pointer debugging can be toggled per-layout-node (not just via `COMPOSE_DEBUG_MODIFIERS`).

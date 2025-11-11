@@ -13,12 +13,15 @@ mod background;
 mod chain;
 mod clickable;
 mod draw_cache;
+mod fill;
 mod focus;
 mod graphics_layer;
 mod local;
+mod offset;
 mod padding;
 mod pointer_input;
 mod semantics;
+mod size;
 mod slices;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
@@ -219,138 +222,6 @@ impl Modifier {
         Self::default()
     }
 
-    pub fn size(size: Size) -> Self {
-        let width = size.width;
-        let height = size.height;
-        Self::with_element(SizeElement::new(Some(width), Some(height)), move |state| {
-            state.layout.width = DimensionConstraint::Points(width);
-            state.layout.height = DimensionConstraint::Points(height);
-        })
-        .with_inspector_metadata(inspector_metadata("size", move |info| {
-            info.add_dimension("width", DimensionConstraint::Points(width));
-            info.add_dimension("height", DimensionConstraint::Points(height));
-        }))
-    }
-
-    pub fn size_points(width: f32, height: f32) -> Self {
-        Self::size(Size { width, height })
-    }
-
-    pub fn width(width: f32) -> Self {
-        Self::with_element(SizeElement::new(Some(width), None), move |state| {
-            state.layout.width = DimensionConstraint::Points(width);
-        })
-        .with_inspector_metadata(inspector_metadata("width", move |info| {
-            info.add_dimension("width", DimensionConstraint::Points(width));
-        }))
-    }
-
-    pub fn height(height: f32) -> Self {
-        Self::with_element(SizeElement::new(None, Some(height)), move |state| {
-            state.layout.height = DimensionConstraint::Points(height);
-        })
-        .with_inspector_metadata(inspector_metadata("height", move |info| {
-            info.add_dimension("height", DimensionConstraint::Points(height));
-        }))
-    }
-
-    pub fn width_intrinsic(intrinsic: IntrinsicSize) -> Self {
-        Self::with_state(move |state| {
-            state.layout.width = DimensionConstraint::Intrinsic(intrinsic);
-        })
-        .with_inspector_metadata(inspector_metadata("widthIntrinsic", move |info| {
-            info.add_dimension("width", DimensionConstraint::Intrinsic(intrinsic));
-        }))
-    }
-
-    pub fn height_intrinsic(intrinsic: IntrinsicSize) -> Self {
-        Self::with_state(move |state| {
-            state.layout.height = DimensionConstraint::Intrinsic(intrinsic);
-        })
-        .with_inspector_metadata(inspector_metadata("heightIntrinsic", move |info| {
-            info.add_dimension("height", DimensionConstraint::Intrinsic(intrinsic));
-        }))
-    }
-
-    pub fn fill_max_size() -> Self {
-        Self::fill_max_size_fraction(1.0)
-    }
-
-    pub fn fill_max_size_fraction(fraction: f32) -> Self {
-        let clamped = fraction.clamp(0.0, 1.0);
-        Self::with_state(move |state| {
-            state.layout.width = DimensionConstraint::Fraction(clamped);
-            state.layout.height = DimensionConstraint::Fraction(clamped);
-        })
-        .with_inspector_metadata(inspector_metadata("fillMaxSize", move |info| {
-            info.add_dimension("width", DimensionConstraint::Fraction(clamped));
-            info.add_dimension("height", DimensionConstraint::Fraction(clamped));
-        }))
-    }
-
-    pub fn fill_max_width() -> Self {
-        Self::fill_max_width_fraction(1.0)
-    }
-
-    pub fn fill_max_width_fraction(fraction: f32) -> Self {
-        let clamped = fraction.clamp(0.0, 1.0);
-        Self::with_state(move |state| {
-            state.layout.width = DimensionConstraint::Fraction(clamped);
-        })
-        .with_inspector_metadata(inspector_metadata("fillMaxWidth", move |info| {
-            info.add_dimension("width", DimensionConstraint::Fraction(clamped));
-        }))
-    }
-
-    pub fn fill_max_height() -> Self {
-        Self::fill_max_height_fraction(1.0)
-    }
-
-    pub fn fill_max_height_fraction(fraction: f32) -> Self {
-        let clamped = fraction.clamp(0.0, 1.0);
-        Self::with_state(move |state| {
-            state.layout.height = DimensionConstraint::Fraction(clamped);
-        })
-        .with_inspector_metadata(inspector_metadata("fillMaxHeight", move |info| {
-            info.add_dimension("height", DimensionConstraint::Fraction(clamped));
-        }))
-    }
-
-    pub fn offset(x: f32, y: f32) -> Self {
-        Self::offset_modifier(x, y).with_inspector_metadata(inspector_metadata(
-            "offset",
-            move |info| {
-                info.add_offset_components("offsetX", "offsetY", Point { x, y });
-            },
-        ))
-    }
-
-    pub fn absolute_offset(x: f32, y: f32) -> Self {
-        Self::offset_modifier(x, y).with_inspector_metadata(inspector_metadata(
-            "absoluteOffset",
-            move |info| {
-                info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
-            },
-        ))
-    }
-
-    fn offset_modifier(x: f32, y: f32) -> Self {
-        Self::with_state(move |state| {
-            state.offset.x += x;
-            state.offset.y += y;
-        })
-    }
-
-    pub fn required_size(size: Size) -> Self {
-        Self::with_state(move |state| {
-            state.layout.width = DimensionConstraint::Points(size.width);
-            state.layout.height = DimensionConstraint::Points(size.height);
-            state.layout.min_width = Some(size.width);
-            state.layout.max_width = Some(size.width);
-            state.layout.min_height = Some(size.height);
-            state.layout.max_height = Some(size.height);
-        })
-    }
 
     pub fn weight(weight: f32) -> Self {
         Self::weight_with_fill(weight, true)
