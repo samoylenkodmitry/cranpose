@@ -230,6 +230,10 @@ impl LayoutNode {
                 InvalidationKind::Semantics => {
                     self.request_semantics_update();
                 }
+                InvalidationKind::Focus => {
+                    // Focus invalidations are handled separately by the focus manager
+                    // and don't require layout or draw updates
+                }
             }
         }
     }

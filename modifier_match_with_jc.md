@@ -6,8 +6,7 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 
 ## Current Gaps (Compose-RS)
 - `Modifier` is still an Rc-backed builder with cached layout/draw state for legacy APIs. Renderers now read reconciled node slices, but `ModifierState` continues to provide padding/layout caches and must be removed once every factory is node-backed.
-- Focus is the last holdout that still treats the modifier chain as a flat list; its ancestor search, invalidations, and capability gating must move onto the delegate-aware traversal helpers.
-- Diagnostics exist (`Modifier::fmt`, `debug::log_modifier_chain`, `COMPOSE_DEBUG_MODIFIERS`), but we still lack parity tooling such as Kotlin's inspector strings, capability dumps with delegate depth, and targeted tracing hooks used by focus/pointer stacks.
+- Diagnostics exist (`Modifier::fmt`, `debug::log_modifier_chain`, `COMPOSE_DEBUG_MODIFIERS`), but we still lack parity tooling such as Kotlin's inspector strings, capability dumps with delegate depth, per-node tracing toggles, and focused tracing hooks used by focus/pointer stacks.
 
 ## Jetpack Compose Reference Anchors
 - `Modifier.kt`: immutable interface (`EmptyModifier`, `CombinedModifier`) plus `foldIn`, `foldOut`, `any`, `all`, `then`.
@@ -24,33 +23,39 @@ Goal: match Jetpack Compose’s `Modifier` API surface and `Modifier.Node` runti
 - `ModifierNodeChain` now mirrors Kotlin's delegate semantics: every node exposes parent/child links, delegate stacks feed the traversal helpers, aggregate capability masks propagate through delegates, and tests cover ordering, sentinel wiring, and capability short-circuiting without any `unsafe`.
 - Runtime consumers (modifier locals, pointer input, semantics helpers, diagnostics, and resolver pipelines) now use the delegate-aware traversal helpers exclusively; the legacy iterator APIs were removed and tests cover delegated capability discovery.
 - **Semantics tree is now fully modifier-driven:** `SemanticsOwner` caches configurations by `NodeId`, `build_semantics_node` derives roles/actions exclusively from `SemanticsConfiguration` flags, semantics dirty flag is independent of layout, and capability-filtered traversal respects delegate depth. `RuntimeNodeMetadata` removed from the semantics extraction path.
+- **Focus chain parity achieved:** `FocusTargetNode` and `FocusRequesterNode` implement full `ModifierNode` lifecycle, focus traversal uses `NodeCapabilities::FOCUS` with delegate-aware visitors (`find_parent_focus_target`, `find_first_focus_target`), `FocusManager` tracks state without unsafe code, focus invalidations are independent of layout/draw, and all 6 tests pass covering lifecycle, callbacks, chain integration, and state predicates.
 
 ## Migration Plan
 1. **Mirror the `Modifier` data model (Kotlin: `Modifier.kt`)**  
    Keep the fluent API identical (fold helpers, `any`/`all`, inspector metadata) and delete the remaining runtime responsibilities of `ModifierState` once all factories are node-backed.
 2. **Adopt `ModifierNodeElement` / `Modifier.Node` parity (Kotlin: `ModifierNodeElement.kt`)**  
    Implement the full lifecycle contract: `onAttach`, `onDetach`, `onReset`, coroutine scope ownership, and equality/key-driven reuse.
-3. **Implement delegate traversal + capability plumbing (Kotlin: `NodeChain.kt`, `NodeKind.kt`, `DelegatableNode.kt`)**  
-   ✅ Delegate stacks + traversal helpers now match Kotlin. **Remaining:** wire the focus subsystem onto the helpers so capability-aware short-circuiting covers every pipeline.
+3. **Implement delegate traversal + capability plumbing (Kotlin: `NodeChain.kt`, `NodeKind.kt`, `DelegatableNode.kt`)**
+   ✅ Delegate stacks + traversal helpers now match Kotlin. Focus subsystem now uses capability-aware short-circuiting.
 4. **Wire all runtime subsystems through chains**
-   ✅ Layout/draw/pointer/semantics now read reconciled nodes exclusively. **Remaining:** wire focus chains onto delegate-aware traversal helpers and remove residual `ModifierState` caches.
+   ✅ Layout/draw/pointer/semantics/focus now read reconciled nodes exclusively via delegate-aware traversal. **Remaining:** remove residual `ModifierState` caches.
 5. **Migrate modifier factories + diagnostics**  
    Finish porting the remaining factories off `ModifierState`, add Kotlin-style inspector dumps/trace hooks, and grow the parity test matrix to compare traversal order/capabilities against the Android reference.
 
 ## Near-Term Next Steps
-1. **Focus chain parity**  
-   - Wire the focus manager/requester utilities through `ModifierNodeChain`’s delegate traversal helpers so focus targets, focus order, and ancestor resolution short-circuit via capability masks.  
-   - Port the relevant pieces from `androidx.compose.ui.focus.*` (especially `FocusTransactions.kt`, `FocusTraversalPolicy.kt`) to ensure Kotlin’s `visitAncestors/visitChildren` semantics hold, and add tests that cover delegated focus nodes.
+1. **(✅) Focus chain parity**
+   - ✅ Focus manager/requester utilities now use `ModifierNodeChain`'s delegate traversal helpers with `NodeCapabilities::FOCUS` short-circuiting.
+   - ✅ Focus target/requester nodes implement full `ModifierNode` lifecycle (`onAttach`, `onDetach`).
+   - ✅ Traversal helpers (`find_parent_focus_target`, `find_first_focus_target`) use capability-filtered visitors.
+   - ✅ Tests cover lifecycle, callbacks, chain integration, delegation, and state predicates.
 2. **(✅) Semantics stack parity**
    - ✅ `SemanticsOwner` caches `SemanticsConfiguration` per node, lazily computes on access, and supports invalidation.
    - ✅ `build_semantics_node` derives roles/actions from configuration flags (not widget types), respects capability masks, and clears semantics dirty flags.
    - ✅ Tests cover caching, role synthesis, multiple modifier merging, and semantics-only updates.
-3. **Diagnostics + focus-ready infrastructure**  
-   - Extend debugging helpers (`Modifier.to_string()`, chain dumps) to include delegate depth, modifier locals provided, semantics flags, and capability masks.  
-   - Port Kotlin’s tracing (`NodeChain#trace`, inspector strings) so modifier/focus debugging has feature parity and can be toggled per-layout-node (not just via `COMPOSE_DEBUG_MODIFIERS`).
-4. **Modifier factory + `ModifierState` removal**  
-   - Audit every `Modifier` factory to ensure it’s fully node-backed; delete `ModifierState` caches after verifying layout/draw/inspection behavior via tests.  
-   - Update docs/examples to emphasize node-backed factories and remove stale ModOp/`ModifierState` guidance.
+3. **Modifier factory audit & `ModifierState` removal**
+   - Audit every `Modifier` factory to ensure it's fully node-backed (currently: `padding`, `background`, `draw*`, `clipToBounds`, `pointerInput`, `clickable`, `focusTarget`, `semantics` are done).
+   - Migrate remaining factories (`offset`, `size`, `weight`, alignment helpers, intrinsic size modifiers) to use element-backed nodes.
+   - Remove `ModifierState` struct once all factories operate exclusively through reconciled node chains.
+   - Update `Modifier::resolved_modifiers()` to build from nodes only, eliminating legacy cache consultation.
+4. **Enhanced diagnostics & inspector parity**
+   - Extend debugging helpers (`Modifier::to_string()`, chain dumps) to include delegate depth, modifier locals provided, semantics/focus flags, and capability masks.
+   - Port Kotlin's inspector strings and per-node tracing (`NodeChain#trace`) so modifier/focus/pointer debugging can be toggled per-layout-node (not just via `COMPOSE_DEBUG_MODIFIERS`).
+   - Add capability-aware chain visualization showing which nodes respond to which invalidations.
 
 ## Kotlin Reference Playbook
 | Area | Kotlin Source | Compose-RS Target |

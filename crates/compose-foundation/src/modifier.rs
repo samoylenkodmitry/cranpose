@@ -29,6 +29,7 @@ pub enum InvalidationKind {
     Draw,
     PointerInput,
     Semantics,
+    Focus,
 }
 
 /// Runtime services exposed to modifier nodes while attached to a tree.
@@ -276,6 +277,16 @@ pub trait ModifierNode: Any + DelegatableNode {
         None
     }
 
+    /// Returns this node as a focus modifier if it implements the trait.
+    fn as_focus_node(&self) -> Option<&dyn FocusNode> {
+        None
+    }
+
+    /// Returns this node as a mutable focus modifier if it implements the trait.
+    fn as_focus_node_mut(&mut self) -> Option<&mut dyn FocusNode> {
+        None
+    }
+
     /// Visits every delegate node owned by this modifier.
     fn for_each_delegate<'b>(&'b self, _visitor: &mut dyn FnMut(&'b dyn ModifierNode)) {}
 
@@ -383,6 +394,65 @@ pub trait SemanticsNode: ModifierNode {
     }
 }
 
+/// Focus state of a focus target node.
+///
+/// This mirrors Jetpack Compose's FocusState enum which tracks whether
+/// a node is focused, has a focused child, or is inactive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FocusState {
+    /// The focusable component is currently active (i.e. it receives key events).
+    Active,
+    /// One of the descendants of the focusable component is Active.
+    ActiveParent,
+    /// The focusable component is currently active (has focus), and is in a state
+    /// where it does not want to give up focus. (Eg. a text field with an invalid
+    /// phone number).
+    Captured,
+    /// The focusable component does not receive any key events. (ie it is not active,
+    /// nor are any of its descendants active).
+    Inactive,
+}
+
+impl FocusState {
+    /// Returns whether the component is focused (Active or Captured).
+    pub fn is_focused(self) -> bool {
+        matches!(self, FocusState::Active | FocusState::Captured)
+    }
+
+    /// Returns whether this node or any descendant has focus.
+    pub fn has_focus(self) -> bool {
+        matches!(
+            self,
+            FocusState::Active | FocusState::ActiveParent | FocusState::Captured
+        )
+    }
+
+    /// Returns whether focus is captured.
+    pub fn is_captured(self) -> bool {
+        matches!(self, FocusState::Captured)
+    }
+}
+
+impl Default for FocusState {
+    fn default() -> Self {
+        Self::Inactive
+    }
+}
+
+/// Marker trait for focus modifier nodes.
+///
+/// Focus nodes participate in focus management. They can request focus,
+/// track focus state, and participate in focus traversal.
+pub trait FocusNode: ModifierNode {
+    /// Returns the current focus state of this node.
+    fn focus_state(&self) -> FocusState;
+
+    /// Called when focus state changes for this node.
+    fn on_focus_changed(&mut self, _context: &mut dyn ModifierNodeContext, _state: FocusState) {
+        // Default: no action on focus change
+    }
+}
+
 /// Semantics configuration for accessibility.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SemanticsConfiguration {
@@ -471,6 +541,8 @@ impl NodeCapabilities {
     pub const SEMANTICS: Self = Self(1 << 3);
     /// Modifier participates in modifier locals.
     pub const MODIFIER_LOCALS: Self = Self(1 << 4);
+    /// Modifier participates in focus management.
+    pub const FOCUS: Self = Self(1 << 5);
 
     /// Returns an empty capability set.
     pub const fn empty() -> Self {
@@ -509,6 +581,7 @@ impl NodeCapabilities {
             InvalidationKind::Draw => Self::DRAW,
             InvalidationKind::PointerInput => Self::POINTER_INPUT,
             InvalidationKind::Semantics => Self::SEMANTICS,
+            InvalidationKind::Focus => Self::FOCUS,
         }
     }
 }
@@ -527,6 +600,7 @@ impl fmt::Debug for NodeCapabilities {
             .field("pointer_input", &self.contains(Self::POINTER_INPUT))
             .field("semantics", &self.contains(Self::SEMANTICS))
             .field("modifier_locals", &self.contains(Self::MODIFIER_LOCALS))
+            .field("focus", &self.contains(Self::FOCUS))
             .finish()
     }
 }
@@ -1446,6 +1520,55 @@ impl<'a> ModifierChainNodeRef<'a> {
                 f(node);
             }
         });
+    }
+
+    /// Finds the nearest ancestor focus target node.
+    ///
+    /// This is useful for focus navigation to find the parent focusable
+    /// component in the tree.
+    pub fn find_parent_focus_target(&self) -> Option<ModifierChainNodeRef<'a>> {
+        let mut result = None;
+        self.clone().visit_ancestors_matching(
+            false,
+            NodeCapabilities::FOCUS,
+            |node| {
+                if result.is_none() {
+                    result = Some(node);
+                }
+            },
+        );
+        result
+    }
+
+    /// Finds the first descendant focus target node.
+    ///
+    /// This is useful for focus navigation to find the first focusable
+    /// child component in the tree.
+    pub fn find_first_focus_target(&self) -> Option<ModifierChainNodeRef<'a>> {
+        let mut result = None;
+        self.clone().visit_descendants_matching(
+            false,
+            NodeCapabilities::FOCUS,
+            |node| {
+                if result.is_none() {
+                    result = Some(node);
+                }
+            },
+        );
+        result
+    }
+
+    /// Returns true if this node or any ancestor has focus capability.
+    pub fn has_focus_capability_in_ancestors(&self) -> bool {
+        let mut found = false;
+        self.clone().visit_ancestors_matching(
+            true,
+            NodeCapabilities::FOCUS,
+            |_| {
+                found = true;
+            },
+        );
+        found
     }
 }
 

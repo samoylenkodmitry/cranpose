@@ -13,6 +13,7 @@ mod background;
 mod chain;
 mod clickable;
 mod draw_cache;
+mod focus;
 mod graphics_layer;
 mod local;
 mod padding;
@@ -25,13 +26,14 @@ pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 pub use chain::{ModifierChainHandle, ModifierLocalsHandle};
 use compose_foundation::ModifierNodeElement;
 pub use compose_foundation::{
-    modifier_element, AnyModifierElement, DynModifierElement, PointerEvent, PointerEventKind,
-    SemanticsConfiguration,
+    modifier_element, AnyModifierElement, DynModifierElement, FocusState, PointerEvent,
+    PointerEventKind, SemanticsConfiguration,
 };
 pub use compose_ui_graphics::{
     Brush, Color, CornerRadii, EdgeInsets, GraphicsLayer, Point, Rect, RoundedCornerShape, Size,
 };
 use compose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
+pub use focus::{FocusDirection, FocusRequester};
 #[allow(unused_imports)]
 pub use local::{modifier_local_of, ModifierLocalKey, ModifierLocalReadScope};
 pub(crate) use local::{
@@ -43,6 +45,7 @@ pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifie
 pub use slices::{collect_modifier_slices, collect_slices_from_modifier, ModifierNodeSlices};
 
 use crate::modifier_nodes::{ClipToBoundsElement, SizeElement};
+use focus::{FocusRequesterElement, FocusTargetElement};
 use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
 use semantics::SemanticsElement;
 
@@ -434,6 +437,43 @@ impl Modifier {
         F: Fn(&mut SemanticsConfiguration) + 'static,
     {
         let element = SemanticsElement::new(recorder);
+        let modifier =
+            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        self.then(modifier)
+    }
+
+    /// Makes this component focusable.
+    ///
+    /// This adds a focus target node that can receive focus and participate
+    /// in focus traversal. The component will be included in tab order and
+    /// can be focused programmatically.
+    pub fn focus_target(self) -> Self {
+        let element = FocusTargetElement::new();
+        let modifier =
+            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        self.then(modifier)
+    }
+
+    /// Makes this component focusable with a callback for focus changes.
+    ///
+    /// The callback is invoked whenever the focus state changes, allowing
+    /// components to react to gaining or losing focus.
+    pub fn on_focus_changed<F>(self, callback: F) -> Self
+    where
+        F: Fn(FocusState) + 'static,
+    {
+        let element = FocusTargetElement::with_callback(callback);
+        let modifier =
+            Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
+        self.then(modifier)
+    }
+
+    /// Attaches a focus requester to this component.
+    ///
+    /// The requester can be used to programmatically request focus for
+    /// this component from application code.
+    pub fn focus_requester(self, requester: &FocusRequester) -> Self {
+        let element = FocusRequesterElement::new(requester.id());
         let modifier =
             Modifier::from_parts(vec![modifier_element(element)], ModifierState::default());
         self.then(modifier)
