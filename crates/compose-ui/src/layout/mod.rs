@@ -150,9 +150,9 @@ impl LayoutTree {
             self.hit_test_node(child, x, y, handlers);
         }
 
-        // Collect pointer input handlers from this node
-        for handler in node.node_data.modifier_slices.pointer_inputs() {
-            handlers.push(handler.clone());
+        // Collect pointer input handlers from this node's modifier
+        for handler in node.node_data.modifier.pointer_inputs() {
+            handlers.push(handler);
         }
     }
 
@@ -181,9 +181,9 @@ impl LayoutTree {
             self.hit_test_node_clicks(child, x, y, handlers);
         }
 
-        // Collect click handlers from this node
-        for handler in node.node_data.modifier_slices.click_handlers() {
-            handlers.push(handler.clone());
+        // Collect click handler from this node's modifier
+        if let Some(handler) = node.node_data.modifier.click_handler() {
+            handlers.push(handler);
         }
     }
 }
