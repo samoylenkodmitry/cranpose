@@ -6,7 +6,6 @@ use super::nodes::ButtonNode;
 use crate::composable;
 use crate::modifier::Modifier;
 use compose_core::NodeId;
-use indexmap::IndexSet;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -27,10 +26,11 @@ where
     };
 
     let id = compose_core::with_current_composer(|composer| {
-        composer.emit_node(|| ButtonNode {
-            modifier: clickable_modifier.clone(),
-            on_click: on_click_rc.clone(),
-            children: IndexSet::new(),
+        composer.emit_node(|| {
+            let mut node = ButtonNode::default();
+            node.modifier = clickable_modifier.clone();
+            node.on_click = on_click_rc.clone();
+            node
         })
     });
     if let Err(err) = compose_core::with_node_mut(id, |node: &mut ButtonNode| {

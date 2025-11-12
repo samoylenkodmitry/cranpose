@@ -518,6 +518,7 @@ dependencies = [
  "compose-core",
  "compose-foundation",
  "compose-macros",
+ "compose-ui",
 ]
 
 [[package]]

@@ -36,10 +36,6 @@ pub use layout::{
     LayoutNodeKind, LayoutTree, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
     SemanticsTree,
 };
-pub use pointer_dispatch::{
-    clear_pointer_repasses, has_pending_pointer_repasses, process_pointer_repasses,
-    schedule_pointer_repass,
-};
 pub use modifier::{
     collect_modifier_slices, collect_slices_from_modifier, Brush, Color, CornerRadii, EdgeInsets,
     GraphicsLayer, Modifier, ModifierNodeSlices, Point, PointerEvent, PointerEventKind,
@@ -49,6 +45,10 @@ pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
     CornerShapeElement, CornerShapeNode, FillDirection, FillElement, FillNode, OffsetElement,
     OffsetNode, PaddingElement, PaddingNode, SizeElement, SizeNode,
+};
+pub use pointer_dispatch::{
+    clear_pointer_repasses, has_pending_pointer_repasses, process_pointer_repasses,
+    schedule_pointer_repass,
 };
 pub use primitives::{
     Box, BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,

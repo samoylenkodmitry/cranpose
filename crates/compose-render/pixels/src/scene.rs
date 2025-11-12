@@ -97,10 +97,7 @@ impl HitTestTarget for HitRegion {
         }) {
             eprintln!(
                 "failed to apply mutable snapshot for pointer event {:?} at ({}, {}): {}",
-                kind,
-                x,
-                y,
-                err
+                kind, x, y, err
             );
         }
     }
@@ -189,8 +186,12 @@ impl Scene {
         }
         eprintln!(
             "DEBUG: Creating HitRegion at ({:.1}, {:.1}) {}x{} with {} clicks, {} pointer_inputs",
-            rect.x, rect.y, rect.width, rect.height,
-            click_actions.len(), pointer_inputs.len()
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            click_actions.len(),
+            pointer_inputs.len()
         );
         let z_index = self.next_z;
         self.next_z += 1;

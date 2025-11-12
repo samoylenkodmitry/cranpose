@@ -1,7 +1,7 @@
 use crate::modifier::Modifier;
 use compose_core::{Node, NodeId};
 use indexmap::IndexSet;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[derive(Clone)]
@@ -9,6 +9,7 @@ pub struct ButtonNode {
     pub modifier: Modifier,
     pub on_click: Rc<RefCell<dyn FnMut()>>,
     pub children: IndexSet<NodeId>,
+    parent: Cell<Option<NodeId>>,
 }
 
 impl Default for ButtonNode {
@@ -17,6 +18,7 @@ impl Default for ButtonNode {
             modifier: Modifier::empty(),
             on_click: Rc::new(RefCell::new(|| {})),
             children: IndexSet::new(),
+            parent: Cell::new(None),
         }
     }
 }
@@ -59,5 +61,17 @@ impl Node for ButtonNode {
 
     fn children(&self) -> Vec<NodeId> {
         self.children.iter().copied().collect()
+    }
+
+    fn on_attached_to_parent(&mut self, parent: NodeId) {
+        self.parent.set(Some(parent));
+    }
+
+    fn on_removed_from_parent(&mut self) {
+        self.parent.set(None);
+    }
+
+    fn parent(&self) -> Option<NodeId> {
+        self.parent.get()
     }
 }

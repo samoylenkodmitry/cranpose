@@ -7,9 +7,9 @@ use compose_render_common::{HitTestTarget, RenderScene, Renderer};
 use compose_runtime_std::StdRuntime;
 use compose_ui::{
     log_layout_tree, log_render_scene, log_screen_summary, peek_focus_invalidation,
-    peek_pointer_invalidation, peek_render_invalidation, take_focus_invalidation,
-    take_pointer_invalidation, take_render_invalidation, HeadlessRenderer, LayoutEngine,
-    LayoutTree,
+    peek_pointer_invalidation, peek_render_invalidation, request_render_invalidation,
+    take_focus_invalidation, take_pointer_invalidation, take_render_invalidation, HeadlessRenderer,
+    LayoutEngine, LayoutTree,
 };
 use compose_ui_graphics::Size;
 
@@ -112,6 +112,8 @@ where
                 Ok(changed) => {
                     if changed {
                         self.layout_dirty = true;
+                        // Request render invalidation so the scene gets rebuilt
+                        request_render_invalidation();
                     }
                 }
                 Err(NodeError::Missing { id }) => {
@@ -119,10 +121,12 @@ where
                     // This is expected when scopes try to recompose after their nodes are gone
                     log::debug!("Recomposition skipped: node {} no longer exists", id);
                     self.layout_dirty = true;
+                    request_render_invalidation();
                 }
                 Err(err) => {
                     log::error!("recomposition failed: {err}");
                     self.layout_dirty = true;
+                    request_render_invalidation();
                 }
             }
         }

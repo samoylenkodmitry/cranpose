@@ -397,7 +397,7 @@ impl SuspendingPointerInputNode {
         // Compose behavior where rememberUpdatedState keeps the task alive.
         let should_restart = self.keys != keys;
         self.keys = keys;
-        self.handler = handler;  // Update handler even if not restarting
+        self.handler = handler; // Update handler even if not restarting
         if should_restart {
             self.restart();
         }
