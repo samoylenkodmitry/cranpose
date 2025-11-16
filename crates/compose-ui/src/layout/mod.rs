@@ -1029,8 +1029,10 @@ impl LayoutBuilderState {
             Rc::clone(&policy_result),
         ));
 
-        // Reverse adapters for correct outer-to-inner measurement
-        // (e.g., Padding should wrap Text, not Text wrap Padding)
+        // Reverse adapters for correct Jetpack Compose behavior:
+        // In JC, rightmost modifier is applied first (inner), leftmost is outer.
+        // e.g., padding(30).size(100): size is inner, padding is outer -> result is 130
+        // e.g., size(100).padding(30): padding is inner, size is outer -> result is 100
         adapters.reverse();
 
         for adapter in adapters.into_iter() {
