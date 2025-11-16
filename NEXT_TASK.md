@@ -1,11 +1,11 @@
 # Modifier System Migration Tracker
 
-## Status: ⚠️ Layout modifier nodes exist, but layout/draw still run through `ResolvedModifiers`
+## Status: ⚠️ Adapter walk exists, but layout/draw still flatten into `ResolvedModifiers`
 
-Padding/size/offset/fill nodes now implement `LayoutModifierNode::measure()` and intrinsics, and the
-modifier chain is reconciled each pass. However, `measure_through_modifier_chain()` only
-short-circuits `TextModifierNode` and otherwise returns `Err(())`, so `measure_layout_node()` keeps
-mutating constraints/offsets from the collapsed `ResolvedModifiers` snapshot. Text also remains a
+`measure_through_modifier_chain()` now collects built-in layout nodes (padding/size/fill/offset/text)
+and wraps the `MeasurePolicy` with temporary adapters, yet any unknown `LayoutModifierNode` forces a
+fallback to `ResolvedModifiers`. The adapters re-instantiate fresh nodes each measure, so
+invalidation/state is ignored, draw/semantics still read the flattened snapshot, and Text remains a
 string-only stub with monospaced measurement, empty draw, and placeholder semantics.
 
 ## Completed Work
@@ -28,12 +28,13 @@ string-only stub with monospaced measurement, empty draw, and placeholder semant
 - **Widgets**: Pure composables emitting `LayoutNode`s with policies (Empty/Flex/etc.).
 - **Modifier chain**: Builders chain via `self.then(...)`, flatten into `Vec<DynModifierElement>`
   for reconciliation, and also collapse into a `ResolvedModifiers` snapshot for layout/draw.
-- **Measure pipeline**: `measure_through_modifier_chain()` only handles `TextModifierNode`; all other
-  layout modifiers are ignored and `measure_layout_node()` applies padding/size/offset from
-  `ResolvedModifiers`.
+- **Measure pipeline**: `measure_through_modifier_chain()` downcasts to built-in layout nodes and
+  builds new adapters each pass (`crates/compose-ui/src/layout/mod.rs:953-1062`). Any unknown/custom
+  `LayoutModifierNode` triggers a fallback to `ResolvedModifiers`, and the adapters never reuse
+  `ModifierNode` state or invalidations.
 - **Text**: `Text()` adds `TextModifierElement` + `EmptyMeasurePolicy`; the element stores only a
   `String`, the node measures via the monospaced stub in `crates/compose-ui/src/text.rs`, `draw()` is
-  empty, and semantics just set `content_description`.
+  empty, `update()` cannot invalidate on text changes, and semantics just set `content_description`.
 - **Invalidation**: Capability flags exist, but layout/draw/semantics invalidations come from the
   resolved snapshot rather than node-driven updates.
 
@@ -45,23 +46,23 @@ string-only stub with monospaced measurement, empty draw, and placeholder semant
   persistent tree never reaches the runtime. Kotlin walks the `CombinedModifier` tree directly.
 
 ### Layout modifier nodes bypassed
-- `measure_through_modifier_chain()` returns `Err(())` unless it finds `TextModifierNode`
-  (`crates/compose-ui/src/layout/mod.rs:640-706`), so padding/size/offset/fill nodes never wrap
-  child measurables.
+- `measure_through_modifier_chain()` only recognizes built-in nodes and rebuilds temporary adapters
+  (`crates/compose-ui/src/layout/mod.rs:953-1062`); custom layout modifiers fall back to
+  `ResolvedModifiers` and reconciled nodes never receive real `ModifierNodeContext` calls.
 - `ModifierChainHandle::compute_resolved()` sums padding and overwrites later properties into a
   `ResolvedModifiers` snapshot (`crates/compose-ui/src/modifier/chain.rs:173-219`); stacked
-  modifiers lose ordering and “last background wins”.
-- `measure_layout_node()` mutates constraints/offsets from that snapshot
-  (`crates/compose-ui/src/layout/mod.rs:746-880`), so the reconciled node chain is ignored during
-  layout/draw/pointer dispatch.
+  modifiers lose ordering and “last background wins.”
+- `measure_layout_node()` still mutates constraints/offsets from that snapshot when the adapter walk
+  bails out, so draw/pointer/semantics pipelines also ignore modifier nodes.
 
 ### Text modifier pipeline gap
 - `TextModifierElement` captures only a `String`
-  (`crates/compose-ui/src/text_modifier_node.rs:167-205`); style/font resolver/overflow/softWrap/
-  minLines/maxLines/color/auto-size/placeholders/selection cannot reach the node.
+  (`crates/compose-ui/src/text_modifier_node.rs:167-205`) and cannot invalidate on updates; style/
+  font resolver/overflow/softWrap/minLines/maxLines/color/auto-size/placeholders/selection cannot
+  reach the node.
 - `TextModifierNode` uses monospaced measurement, has an empty `draw()`, and only sets
   `content_description` semantics; Kotlin’s `TextStringSimpleNode` manages paragraph caches,
-  baselines, text substitution, and `SemanticsPropertyReceiver.text` (`.../TextStringSimpleNode.kt`).
+  baselines, text substitution, and `SemanticsPropertyReceiver.text` (`.../text/modifiers/TextStringSimpleNode.kt`).
 - The widget API (`crates/compose-ui/src/widgets/text.rs:125-143`) exposes neither style nor
   callbacks like `onTextLayout`, so parity with `BasicText` isn’t possible.
 
@@ -69,8 +70,8 @@ string-only stub with monospaced measurement, empty draw, and placeholder semant
 
 ### 1. Drive layout/draw/pointer through modifier nodes
 - Build a `LayoutModifierNodeCoordinator`-style walk over `ModifierNodeChain`, wrapping measurables
-  and invoking each `LayoutModifierNode` (Padding/Size/Offset/Fill/Text/etc.) in order, with
-  placements and intrinsic queries.
+  and invoking each reconciled `LayoutModifierNode` (not fresh adapters) in order, with placements
+  and intrinsic queries.
 - Surface draw/pointer/semantics nodes from the same chain and honor ordering; stop mutating
   constraints/offsets from `ResolvedModifiers` once nodes drive the pipeline.
 

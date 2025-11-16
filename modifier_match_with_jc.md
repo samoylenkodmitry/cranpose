@@ -29,18 +29,19 @@ that still prevent us from matching Jetpack Compose’s behavior.
   `ResolvedModifiers` snapshot on every pass (`crates/compose-ui/src/modifier/chain.rs:72-231`), so
   structural sharing stops at the API boundary.
 - ⚠️ Layout modifier nodes now implement `LayoutModifierNode::measure()` (padding/size/offset/fill in
-  `crates/compose-ui/src/modifier_nodes.rs`), but `measure_through_modifier_chain()` only
-  short-circuits `TextModifierNode` and otherwise returns `Err(())`
-  (`crates/compose-ui/src/layout/mod.rs:640-706`). `measure_layout_node()` still mutates constraints
-  and offsets from `ResolvedModifiers`, so node implementations never run and modifier ordering is
-  flattened/last-wins.
-- ⚠️ `ResolvedModifiers` remains the only draw/layout input. Padding is summed and backgrounds/graphics
-  layers collapse to the last one seen (`crates/compose-ui/src/modifier/chain.rs:173-219`), so
-  stacked modifiers cannot preserve Kotlin’s node-by-node ordering.
+  `crates/compose-ui/src/modifier_nodes.rs`), but `measure_through_modifier_chain()` downcasts to a
+  hardcoded list and re-instantiates fresh nodes/adapters each measure
+  (`crates/compose-ui/src/layout/mod.rs:953-1062`, `layout/mod.rs:214-305`). Any unknown
+  `LayoutModifierNode` (including user-defined ones) forces a fallback to `ResolvedModifiers`, and
+  the recreated nodes never reuse their `NodeState` or invalidation behavior.
+- ⚠️ `ResolvedModifiers` still drives draw/layout/semantics snapshots. Padding/offset/background and
+  graphics layers are collapsed into last-write wins (`crates/compose-ui/src/modifier/chain.rs:173-219`),
+  so modifier ordering and per-node state are lost.
 - ⚠️ `TextModifierElement` still only stores a raw `String` (`crates/compose-ui/src/text_modifier_node.rs:167-205`);
   `TextModifierNode::measure()` delegates to a monospaced fallback
   (`text_modifier_node.rs:97-135` + `crates/compose-ui/src/text.rs:4-34`), `draw()` is empty, and
-  semantics expose only `content_description`. The widget itself (`crates/compose-ui/src/widgets/text.rs:125-143`)
+  semantics expose only `content_description` while `update()` cannot invalidate on text changes
+  (`text_modifier_node.rs:183-198`). The widget itself (`crates/compose-ui/src/widgets/text.rs:125-143`)
   lacks style/overflow/minLines/maxLines parameters, so parity with `BasicText` is far away.
 - ⚠️ Tests under `crates/compose-ui/src/tests/pointer_input_integration_test.rs` still only assert
   node counts—no integration test actually drives pointer events through `HitTestTarget`.
@@ -77,28 +78,35 @@ that still prevent us from matching Jetpack Compose’s behavior.
 ### Modifier Nodes Still Bypassed During Measure/Draw
 
 **Current Behavior:**
-- `measure_through_modifier_chain()` only checks for `TextModifierNode` and otherwise returns `Err(())`
-  (`crates/compose-ui/src/layout/mod.rs:640-706`), forcing `measure_layout_node()` to fall back to
-  the `MeasurePolicy` path every time.
+- `measure_through_modifier_chain()` walks the reconciled chain but only recognizes the built-in
+  `PaddingNode`/`SizeNode`/`FillNode`/`OffsetNode`/`TextModifierNode`
+  (`crates/compose-ui/src/layout/mod.rs:953-1062`). Any other `LayoutModifierNode` sets an
+  `unsupported_layout_node` flag that forces a fallback to `ResolvedModifiers`.
+- Even for supported nodes, the pipeline rebuilds brand-new adapters every measure using
+  `BasicModifierNodeContext::new()` and temporary nodes
+  (`crates/compose-ui/src/layout/mod.rs:214-305`), so NodeState/invalidations are discarded, and
+  text caches/draw hooks never run on the reconciled node instances.
 - `ModifierChainHandle::compute_resolved()` aggregates padding/size/fill/offset/background into a
-  single `ResolvedModifiers` snapshot (`crates/compose-ui/src/modifier/chain.rs:173-219`), summing
-  padding and overwriting later fields.
+  single `ResolvedModifiers` snapshot (`crates/compose-ui/src/modifier/chain.rs:173-219`) that still
+  feeds draw/semantics and layout fallbacks, summing padding and overwriting later fields.
 - `measure_layout_node()` mutates constraints/offsets from that snapshot
-  (`crates/compose-ui/src/layout/mod.rs:746-880`), so the `LayoutModifierNode` implementations in
-  `crates/compose-ui/src/modifier_nodes.rs` never run despite having full measure/intrinsic logic.
+  (`crates/compose-ui/src/layout/mod.rs:1181-1308`) whenever the adapter walk bails out, so custom
+  modifiers and ordering-sensitive stacks revert to the “last write wins” flattening path.
 
 **Problem:**
-- Layout modifier nodes cannot wrap child measurables or preserve ordering, so stacking modifiers
-  behaves like “last write wins” instead of Kotlin’s node-by-node `LayoutModifierNodeCoordinator`
-  pipeline. Draw/pointer/semantics similarly ignore the reconciled node chain.
+- Layout modifier nodes still cannot wrap child measurables generically or preserve ordering—custom
+  layout modifiers opt out entirely, and built-ins lose their state/invalidations every pass because
+  we never invoke the reconciled nodes. Draw/pointer/semantics likewise ignore the node chain.
 
 **Remaining Work:**
-1. Build a coordinator-style walk over `ModifierNodeChain` that invokes each `LayoutModifierNode` in
-   order (wrapping measurables and respecting placements/offsets) and surfaces draw/pointer nodes.
-2. Remove padding/size/offset/fill constraint munging from `measure_layout_node()` once the node
-   chain drives measurement.
-3. Drop `compute_resolved()` (or keep only draw/semantics data temporarily) after the pipelines read
-   directly from modifier nodes.
+1. Build a coordinator-style walk over `ModifierNodeChain` that invokes each `LayoutModifierNode`
+   instance in order (wrapping measurables and respecting placements/offsets) and surfaces the same
+   instances for draw/pointer/semantics.
+2. Use the reconciled nodes themselves (not new adapters) so invalidation/caching works and text
+   nodes can maintain paragraph caches; call into `ModifierNodeContext` instead of `BasicModifierNodeContext::new()`.
+3. Remove padding/size/offset/fill constraint munging from `measure_layout_node()` once the node
+   chain drives measurement, and drop `compute_resolved()` (or keep only draw/semantics data
+   temporarily) after the pipelines read directly from modifier nodes.
 
 **Reference:** See `androidx/compose/ui/node/LayoutModifierNodeCoordinator.kt` and
 `androidx/compose/ui/node/NodeCoordinator.kt` for the Kotlin reference chain.
@@ -116,7 +124,7 @@ that still prevent us from matching Jetpack Compose’s behavior.
   ad-hoc inspection of the modifier chain.
 - Semantics only sets `content_description`
   (`text_modifier_node.rs:151-155`), and `runtime_metadata_for()` relies on that description to
-  infer `SemanticsRole::Text` (`crates/compose-ui/src/layout/mod.rs:1633-1655`).
+  infer `SemanticsRole::Text` (`crates/compose-ui/src/layout/mod.rs:2101-2144`).
 - The widget itself only exposes `(value, modifier)` (`crates/compose-ui/src/widgets/text.rs:125-143`),
   so there is no way to pass the parameters that Jetpack Compose’s `BasicText` accepts
   (style/font resolver/overflow/minLines/maxLines/autoSize/etc.).
@@ -163,10 +171,10 @@ that still prevent us from matching Jetpack Compose’s behavior.
 6. ⚠️ **Drive layout/draw/pointer work through modifier nodes.** (In Progress - 25% complete)
    - ✅ `LayoutModifierNode::measure()` + intrinsics implemented for Padding/Size/Offset/Fill nodes
      (`crates/compose-ui/src/modifier_nodes.rs`)
-   - ❌ `measure_through_modifier_chain()` only short-circuits `TextModifierNode`; no wrapped
-     measurables or placements for other nodes
-   - ❌ `measure_layout_node()` still applies padding/size/offset from `ResolvedModifiers`
-   - ❌ Draw/pointer pipelines still ignore modifier nodes entirely
+   - ❌ `measure_through_modifier_chain()` rebuilds temporary adapters for known nodes and bails out
+     for any others, so reconciled nodes never drive measurement
+   - ❌ `measure_layout_node()` still applies padding/size/offset from `ResolvedModifiers` when the
+     adapter walk fails, and draw/pointer pipelines ignore modifier nodes entirely
 7. ⚠️ **Finish the Text modifier pipeline.**
    - Mirror `TextStringSimpleNode`’s parameters, hook up GPU paragraph measurement/draw, provide
      semantics + baselines, and delete the metadata special cases.
