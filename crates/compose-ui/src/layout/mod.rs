@@ -28,10 +28,52 @@ use crate::modifier::{
 use crate::modifier_nodes::{FillDirection, FillNode, OffsetNode, PaddingNode, SizeNode};
 use crate::subcompose_layout::SubcomposeLayoutNode;
 use crate::text_modifier_node::TextModifierNode;
+use compose_foundation::InvalidationKind;
 use compose_foundation::ModifierNodeContext;
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
-use compose_foundation::{LayoutModifierNode, SemanticsConfiguration};
+use compose_foundation::{LayoutModifierNode, SemanticsConfiguration, NodeCapabilities};
 use compose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
+
+/// Runtime context for modifier nodes during measurement.
+///
+/// Unlike `BasicModifierNodeContext`, this context accumulates invalidations
+/// that can be processed after measurement to set dirty flags on the LayoutNode.
+#[derive(Default)]
+struct LayoutNodeContext {
+    invalidations: Vec<InvalidationKind>,
+    update_requested: bool,
+    active_capabilities: Vec<NodeCapabilities>,
+}
+
+impl LayoutNodeContext {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn take_invalidations(&mut self) -> Vec<InvalidationKind> {
+        std::mem::take(&mut self.invalidations)
+    }
+}
+
+impl ModifierNodeContext for LayoutNodeContext {
+    fn invalidate(&mut self, kind: InvalidationKind) {
+        if !self.invalidations.contains(&kind) {
+            self.invalidations.push(kind);
+        }
+    }
+
+    fn request_update(&mut self) {
+        self.update_requested = true;
+    }
+
+    fn push_active_capabilities(&mut self, capabilities: NodeCapabilities) {
+        self.active_capabilities.push(capabilities);
+    }
+
+    fn pop_active_capabilities(&mut self) {
+        self.active_capabilities.pop();
+    }
+}
 
 static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
 
@@ -141,6 +183,8 @@ struct ModifierNodeMeasurable<'a> {
     node_id: NodeId,
     node_index: usize,
     wrapped: Box<dyn Measurable + 'a>,
+    /// Shared context for this measurement pass - accumulates invalidations
+    context: Rc<RefCell<LayoutNodeContext>>,
 }
 
 impl<'a> ModifierNodeMeasurable<'a> {
@@ -149,12 +193,14 @@ impl<'a> ModifierNodeMeasurable<'a> {
         node_id: NodeId,
         node_index: usize,
         wrapped: Box<dyn Measurable + 'a>,
+        context: Rc<RefCell<LayoutNodeContext>>,
     ) -> Self {
         Self {
             state_rc,
             node_id,
             node_index,
             wrapped,
+            context,
         }
     }
 
@@ -226,12 +272,34 @@ impl<'a> Measurable for ModifierNodeMeasurable<'a> {
         drop(applier);
         drop(state);
 
-        // Step 4: Now measure using the temporary node (applier is not borrowed)
+        // Step 4: Now measure using the temporary node with our shared context
+        // This allows invalidations to be accumulated and processed after measurement
         match temp_result {
             Ok(Some(mut temp_node)) => {
-                let mut context = compose_foundation::BasicModifierNodeContext::new();
-                let size = temp_node.measure(&mut context, self.wrapped.as_ref(), constraints);
-                Box::new(FixedPlaceable { size })
+                // Try to borrow the shared context - if it's already borrowed (nested measurement),
+                // use a temporary context and merge invalidations afterward
+                match self.context.try_borrow_mut() {
+                    Ok(mut context) => {
+                        // Use the shared context directly
+                        let size = temp_node.measure(&mut *context, self.wrapped.as_ref(), constraints);
+                        Box::new(FixedPlaceable { size })
+                    }
+                    Err(_) => {
+                        // Context is already borrowed (nested measurement) - use a temporary context
+                        let mut temp_context = LayoutNodeContext::new();
+                        let size = temp_node.measure(&mut temp_context, self.wrapped.as_ref(), constraints);
+
+                        // Merge invalidations from temp context into shared context after measurement completes
+                        // This is safe now because the nested measurement has finished
+                        if let Ok(mut shared) = self.context.try_borrow_mut() {
+                            for kind in temp_context.take_invalidations() {
+                                shared.invalidate(kind);
+                            }
+                        }
+
+                        Box::new(FixedPlaceable { size })
+                    }
+                }
             }
             Ok(None) | Err(_) => {
                 // Node type not supported or error - fall back to wrapped
@@ -1300,6 +1368,10 @@ impl LayoutBuilderState {
         // Reverse order: rightmost modifier is measured first (innermost), leftmost is outer
         layout_node_indices.reverse();
 
+        // Create a shared context for this measurement pass
+        // This replaces BasicModifierNodeContext::new() which was created and dropped each measure
+        let shared_context = Rc::new(RefCell::new(LayoutNodeContext::new()));
+
         let policy_result = Rc::new(RefCell::new(None));
         let inner_measurable: Box<dyn Measurable + '_> = Box::new(MeasurePolicyMeasurable::new(
             Rc::clone(measure_policy),
@@ -1315,6 +1387,7 @@ impl LayoutBuilderState {
                 node_id,
                 node_index,
                 current_measurable,
+                Rc::clone(&shared_context),
             ));
         }
 
@@ -1330,6 +1403,26 @@ impl LayoutBuilderState {
             .take()
             .map(|result| result.placements)
             .unwrap_or_default();
+
+        // Process any invalidations requested during measurement
+        let invalidations = shared_context.borrow_mut().take_invalidations();
+        if !invalidations.is_empty() {
+            // Mark the LayoutNode as needing the appropriate passes
+            Self::with_applier_result(state_rc, |applier| {
+                applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                    for kind in invalidations {
+                        match kind {
+                            InvalidationKind::Layout => layout_node.mark_needs_measure(),
+                            InvalidationKind::Draw => layout_node.mark_needs_redraw(),
+                            InvalidationKind::Semantics => layout_node.mark_needs_semantics(),
+                            InvalidationKind::PointerInput => layout_node.mark_needs_pointer_pass(),
+                            InvalidationKind::Focus => layout_node.mark_needs_focus_sync(),
+                        }
+                    }
+                })
+            })
+            .ok();
+        }
 
         Ok(ModifierChainMeasurement {
             result: MeasureResult {
