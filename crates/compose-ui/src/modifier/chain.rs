@@ -38,7 +38,7 @@ pub type ModifierLocalsHandle = Rc<RefCell<ModifierLocalManager>>;
 #[allow(dead_code)]
 pub struct ModifierChainHandle {
     chain: ModifierNodeChain,
-    context: BasicModifierNodeContext,
+    context: RefCell<BasicModifierNodeContext>,
     resolved: ResolvedModifiers,
     capabilities: NodeCapabilities,
     aggregate_child_capabilities: NodeCapabilities,
@@ -51,7 +51,7 @@ impl Default for ModifierChainHandle {
     fn default() -> Self {
         Self {
             chain: ModifierNodeChain::new(),
-            context: BasicModifierNodeContext::new(),
+            context: RefCell::new(BasicModifierNodeContext::new()),
             resolved: ResolvedModifiers::default(),
             capabilities: NodeCapabilities::default(),
             aggregate_child_capabilities: NodeCapabilities::default(),
@@ -80,7 +80,7 @@ impl ModifierChainHandle {
         resolver: &mut ModifierLocalAncestorResolver<'_>,
     ) -> Vec<ModifierInvalidation> {
         let elements = modifier.elements();
-        self.chain.update_from_slice(&elements, &mut self.context);
+        self.chain.update_from_slice(&elements, &mut *self.context.borrow_mut());
         self.capabilities = self.chain.capabilities();
         self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
         let modifier_local_invalidations = self
@@ -105,6 +105,22 @@ impl ModifierChainHandle {
     /// Returns the modifier node chain for read-only traversal.
     pub fn chain(&self) -> &ModifierNodeChain {
         &self.chain
+    }
+
+    /// Returns mutable access to the modifier node chain.
+    pub fn chain_mut(&mut self) -> &mut ModifierNodeChain {
+        &mut self.chain
+    }
+
+    /// Returns mutable access to the modifier node context.
+    pub fn context_mut(&self) -> std::cell::RefMut<BasicModifierNodeContext> {
+        self.context.borrow_mut()
+    }
+
+    /// Returns mutable references to both the chain and context.
+    /// This is a convenience method for measurement that avoids borrow conflicts.
+    pub fn chain_and_context_mut(&mut self) -> (&mut ModifierNodeChain, std::cell::RefMut<BasicModifierNodeContext>) {
+        (&mut self.chain, self.context.borrow_mut())
     }
 
     /// Returns the aggregated capability mask for the reconciled chain.
@@ -134,8 +150,8 @@ impl ModifierChainHandle {
     }
 
     /// Drains invalidations requested during the last update cycle.
-    pub fn take_invalidations(&mut self) -> Vec<ModifierInvalidation> {
-        self.context.take_invalidations()
+    pub fn take_invalidations(&self) -> Vec<ModifierInvalidation> {
+        self.context.borrow_mut().take_invalidations()
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {

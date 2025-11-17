@@ -1165,6 +1165,10 @@ impl<A: Applier + 'static> ConcreteApplierHost<A> {
         self.inner.borrow_mut()
     }
 
+    pub fn try_borrow_typed(&self) -> Result<RefMut<'_, A>, std::cell::BorrowMutError> {
+        self.inner.try_borrow_mut()
+    }
+
     pub fn into_inner(self) -> A {
         self.inner.into_inner()
     }
