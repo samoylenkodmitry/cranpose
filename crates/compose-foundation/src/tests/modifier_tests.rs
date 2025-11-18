@@ -612,7 +612,7 @@ impl ModifierNode for TestLayoutNode {
 
 impl LayoutModifierNode for TestLayoutNode {
     fn measure(
-        &mut self,
+        &self,
         _context: &mut dyn ModifierNodeContext,
         _measurable: &dyn Measurable,
         _constraints: Constraints,
@@ -842,7 +842,7 @@ struct DelegatedSemanticsNode {
 
 impl DelegatedSemanticsNode {
     fn new(label: &'static str) -> Self {
-        let mut node = Self {
+        let node = Self {
             label,
             state: NodeState::new(),
         };
@@ -878,7 +878,7 @@ struct SemanticsDelegatingHostNode {
 
 impl SemanticsDelegatingHostNode {
     fn new(_host_id: &'static str, label: &'static str) -> Self {
-        let mut node = Self {
+        let node = Self {
             state: NodeState::new(),
             delegate: DelegatedSemanticsNode::new(label),
         };
@@ -934,7 +934,7 @@ struct DelegatedPointerNode {
 
 impl DelegatedPointerNode {
     fn new(label: &'static str) -> Self {
-        let mut node = Self {
+        let node = Self {
             label,
             state: NodeState::new(),
         };
@@ -965,7 +965,7 @@ struct PointerDelegatingHostNode {
 
 impl PointerDelegatingHostNode {
     fn new(_host_id: &'static str, label: &'static str) -> Self {
-        let mut node = Self {
+        let node = Self {
             state: NodeState::new(),
             delegate: DelegatedPointerNode::new(label),
         };

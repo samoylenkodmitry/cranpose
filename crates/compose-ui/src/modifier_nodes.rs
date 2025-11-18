@@ -162,7 +162,7 @@ impl ModifierNode for PaddingNode {
 
 impl LayoutModifierNode for PaddingNode {
     fn measure(
-        &mut self,
+        &self,
         _context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,
@@ -634,7 +634,7 @@ impl ModifierNode for SizeNode {
 
 impl LayoutModifierNode for SizeNode {
     fn measure(
-        &mut self,
+        &self,
         _context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,
@@ -1483,7 +1483,7 @@ impl ModifierNode for OffsetNode {
 
 impl LayoutModifierNode for OffsetNode {
     fn measure(
-        &mut self,
+        &self,
         _context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,
@@ -1619,7 +1619,7 @@ impl ModifierNode for FillNode {
 
 impl LayoutModifierNode for FillNode {
     fn measure(
-        &mut self,
+        &self,
         _context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,

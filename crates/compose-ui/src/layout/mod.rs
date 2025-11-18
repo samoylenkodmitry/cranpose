@@ -39,18 +39,18 @@ use compose_ui_layout::{Constraints, MeasurePolicy, MeasureResult};
 /// Unlike `BasicModifierNodeContext`, this context accumulates invalidations
 /// that can be processed after measurement to set dirty flags on the LayoutNode.
 #[derive(Default)]
-struct LayoutNodeContext {
+pub(crate) struct LayoutNodeContext {
     invalidations: Vec<InvalidationKind>,
     update_requested: bool,
     active_capabilities: Vec<NodeCapabilities>,
 }
 
 impl LayoutNodeContext {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    fn take_invalidations(&mut self) -> Vec<InvalidationKind> {
+    pub(crate) fn take_invalidations(&mut self) -> Vec<InvalidationKind> {
         std::mem::take(&mut self.invalidations)
     }
 }
@@ -455,7 +455,7 @@ impl LayoutModifierAdapter {
     fn padding(padding: EdgeInsets) -> Self {
         Self {
             measure: Box::new(move |measurable, constraints| {
-                let mut node = PaddingNode::new(padding);
+                let node = PaddingNode::new(padding);
                 let mut context = compose_foundation::BasicModifierNodeContext::new();
                 node.measure(&mut context, measurable, constraints)
             }),
@@ -489,7 +489,7 @@ impl LayoutModifierAdapter {
     ) -> Self {
         Self {
             measure: Box::new(move |measurable, constraints| {
-                let mut node = SizeNode::new(
+                let node = SizeNode::new(
                     min_width,
                     max_width,
                     min_height,
@@ -547,7 +547,7 @@ impl LayoutModifierAdapter {
     fn fill(direction: FillDirection, fraction: f32) -> Self {
         Self {
             measure: Box::new(move |measurable, constraints| {
-                let mut node = FillNode::new(direction, fraction);
+                let node = FillNode::new(direction, fraction);
                 let mut context = compose_foundation::BasicModifierNodeContext::new();
                 node.measure(&mut context, measurable, constraints)
             }),
@@ -575,7 +575,7 @@ impl LayoutModifierAdapter {
     fn offset(offset: Point, rtl_aware: bool) -> Self {
         Self {
             measure: Box::new(move |measurable, constraints| {
-                let mut node = OffsetNode::new(offset.x, offset.y, rtl_aware);
+                let node = OffsetNode::new(offset.x, offset.y, rtl_aware);
                 let mut context = compose_foundation::BasicModifierNodeContext::new();
                 node.measure(&mut context, measurable, constraints)
             }),
@@ -610,7 +610,7 @@ impl LayoutModifierAdapter {
 
         Self {
             measure: Box::new(move |_measurable, constraints| {
-                let mut node = TextModifierNode::new((*measure_text).clone());
+                let node = TextModifierNode::new((*measure_text).clone());
                 let mut context = compose_foundation::BasicModifierNodeContext::new();
                 node.measure(&mut context, &DummyMeasurable, constraints)
             }),

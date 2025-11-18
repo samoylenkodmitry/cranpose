@@ -401,8 +401,11 @@ pub trait LayoutModifierNode: ModifierNode {
     ///
     /// The default implementation delegates to the wrapped content without
     /// modification.
+    ///
+    /// NOTE: This takes `&self` not `&mut self` to match Jetpack Compose semantics.
+    /// Nodes that need mutable state should use interior mutability (Cell/RefCell).
     fn measure(
-        &mut self,
+        &self,
         _context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,

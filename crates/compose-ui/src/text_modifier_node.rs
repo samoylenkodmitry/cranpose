@@ -104,7 +104,7 @@ impl ModifierNode for TextModifierNode {
 
 impl LayoutModifierNode for TextModifierNode {
     fn measure(
-        &mut self,
+        &self,
         _context: &mut dyn ModifierNodeContext,
         _measurable: &dyn Measurable,
         constraints: Constraints,
