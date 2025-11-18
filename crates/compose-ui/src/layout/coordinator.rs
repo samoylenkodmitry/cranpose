@@ -131,7 +131,10 @@ impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {
 
     fn place(&mut self, x: f32, y: f32) {
         self.set_position(Point { x, y });
-        // TODO: Placement logic - propagate to wrapped
+        // NOTE: Placement propagation not yet implemented.
+        // In Jetpack Compose, this would call wrapped.place() with appropriate transformations.
+        // Currently, placement is handled through MeasureResult placements after measurement.
+        // This will be implemented when coordinators are extended to handle the full layout pass.
     }
 }
 
