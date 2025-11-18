@@ -4,10 +4,12 @@
 
 pub mod modifier;
 pub mod modifier_helpers;
+pub mod measurement_proxy;
 pub mod nodes;
 
 // Re-export commonly used items
 pub use modifier::*;
+pub use measurement_proxy::*;
 pub use nodes::input::{
     PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId, PointerPhase,
 };
@@ -18,6 +20,7 @@ pub mod prelude {
         LayoutModifierNode, Measurable, ModifierElement, ModifierNode, ModifierNodeChain,
         ModifierNodeContext, ModifierNodeElement, PointerInputNode, SemanticsNode, Size,
     };
+    pub use crate::measurement_proxy::*;
     pub use crate::modifier_helpers::*;
     pub use crate::nodes::input::prelude::*;
     // Re-export the helper macros for convenience

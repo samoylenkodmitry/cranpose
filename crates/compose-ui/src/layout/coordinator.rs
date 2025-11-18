@@ -4,229 +4,15 @@
 //! drawing, and hit testing. Each LayoutModifierNode gets its own coordinator instance
 //! that persists across recomposition, enabling proper state and invalidation tracking.
 
-use compose_foundation::{LayoutModifierNode, ModifierNodeContext, NodeCapabilities};
+use compose_foundation::{LayoutModifierNode, MeasurementProxy, ModifierNodeContext, NodeCapabilities};
 use compose_ui_layout::{Constraints, Measurable, Placeable};
 use compose_core::NodeId;
 use std::cell::{RefCell, Cell};
 use std::rc::Rc;
 
-use crate::modifier::{Size, Point, EdgeInsets};
+use crate::modifier::{Size, Point};
 use crate::layout::{MeasurePolicy, MeasureResult, LayoutNodeContext};
 use crate::widgets::nodes::LayoutNode;
-
-/// Trait for nodes that can create a measurement proxy to work around borrow checker constraints.
-///
-/// In Jetpack Compose, coordinators can hold direct references to nodes. In Rust, we need to
-/// work around the borrow checker by extracting enough information to perform measurement
-/// without holding a borrow to the modifier chain.
-trait MeasurementProxy {
-    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size;
-    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32;
-    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32;
-    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32;
-    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32;
-}
-
-/// Generic proxy that works for any layout modifier node by recreating it from configuration data.
-struct GenericMeasurementProxy<T> {
-    data: T,
-}
-
-impl<T> GenericMeasurementProxy<T> {
-    fn new(data: T) -> Self {
-        Self { data }
-    }
-}
-
-// Implement proxy for known node types
-use crate::modifier_nodes::{PaddingNode, SizeNode, FillNode, OffsetNode, FillDirection};
-use crate::text_modifier_node::TextModifierNode;
-
-// Proxy implementations for each known node type
-impl MeasurementProxy for GenericMeasurementProxy<EdgeInsets> {
-    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
-        let node = PaddingNode::new(self.data);
-        node.measure(context, wrapped, constraints)
-    }
-
-    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = PaddingNode::new(self.data);
-        node.min_intrinsic_width(wrapped, height)
-    }
-
-    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = PaddingNode::new(self.data);
-        node.max_intrinsic_width(wrapped, height)
-    }
-
-    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = PaddingNode::new(self.data);
-        node.min_intrinsic_height(wrapped, width)
-    }
-
-    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = PaddingNode::new(self.data);
-        node.max_intrinsic_height(wrapped, width)
-    }
-}
-
-struct SizeNodeConfig {
-    min_width: Option<f32>,
-    max_width: Option<f32>,
-    min_height: Option<f32>,
-    max_height: Option<f32>,
-    enforce: bool,
-}
-
-impl MeasurementProxy for GenericMeasurementProxy<SizeNodeConfig> {
-    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
-        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
-        node.measure(context, wrapped, constraints)
-    }
-
-    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
-        node.min_intrinsic_width(wrapped, height)
-    }
-
-    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
-        node.max_intrinsic_width(wrapped, height)
-    }
-
-    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
-        node.min_intrinsic_height(wrapped, width)
-    }
-
-    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = SizeNode::new(self.data.min_width, self.data.max_width, self.data.min_height, self.data.max_height, self.data.enforce);
-        node.max_intrinsic_height(wrapped, width)
-    }
-}
-
-struct FillNodeConfig {
-    direction: FillDirection,
-    fraction: f32,
-}
-
-impl MeasurementProxy for GenericMeasurementProxy<FillNodeConfig> {
-    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
-        let node = FillNode::new(self.data.direction, self.data.fraction);
-        node.measure(context, wrapped, constraints)
-    }
-
-    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = FillNode::new(self.data.direction, self.data.fraction);
-        node.min_intrinsic_width(wrapped, height)
-    }
-
-    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = FillNode::new(self.data.direction, self.data.fraction);
-        node.max_intrinsic_width(wrapped, height)
-    }
-
-    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = FillNode::new(self.data.direction, self.data.fraction);
-        node.min_intrinsic_height(wrapped, width)
-    }
-
-    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = FillNode::new(self.data.direction, self.data.fraction);
-        node.max_intrinsic_height(wrapped, width)
-    }
-}
-
-struct OffsetNodeConfig {
-    offset: Point,
-    rtl_aware: bool,
-}
-
-impl MeasurementProxy for GenericMeasurementProxy<OffsetNodeConfig> {
-    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
-        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
-        node.measure(context, wrapped, constraints)
-    }
-
-    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
-        node.min_intrinsic_width(wrapped, height)
-    }
-
-    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
-        node.max_intrinsic_width(wrapped, height)
-    }
-
-    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
-        node.min_intrinsic_height(wrapped, width)
-    }
-
-    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = OffsetNode::new(self.data.offset.x, self.data.offset.y, self.data.rtl_aware);
-        node.max_intrinsic_height(wrapped, width)
-    }
-}
-
-impl MeasurementProxy for GenericMeasurementProxy<String> {
-    fn measure_proxy(&self, context: &mut dyn ModifierNodeContext, wrapped: &dyn Measurable, constraints: Constraints) -> Size {
-        let node = TextModifierNode::new(self.data.clone());
-        node.measure(context, wrapped, constraints)
-    }
-
-    fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = TextModifierNode::new(self.data.clone());
-        node.min_intrinsic_width(wrapped, height)
-    }
-
-    fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
-        let node = TextModifierNode::new(self.data.clone());
-        node.max_intrinsic_width(wrapped, height)
-    }
-
-    fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = TextModifierNode::new(self.data.clone());
-        node.min_intrinsic_height(wrapped, width)
-    }
-
-    fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
-        let node = TextModifierNode::new(self.data.clone());
-        node.max_intrinsic_height(wrapped, width)
-    }
-}
-
-/// Extracts a measurement proxy from a layout modifier node.
-/// Returns None if the node type is unknown (for future extensibility).
-fn extract_measurement_proxy(node: &dyn LayoutModifierNode) -> Option<Box<dyn MeasurementProxy>> {
-    let any = node as &dyn std::any::Any;
-
-    if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-        Some(Box::new(GenericMeasurementProxy::new(padding_node.padding())))
-    } else if let Some(size_node) = any.downcast_ref::<SizeNode>() {
-        Some(Box::new(GenericMeasurementProxy::new(SizeNodeConfig {
-            min_width: size_node.min_width(),
-            max_width: size_node.max_width(),
-            min_height: size_node.min_height(),
-            max_height: size_node.max_height(),
-            enforce: size_node.enforce_incoming(),
-        })))
-    } else if let Some(fill_node) = any.downcast_ref::<FillNode>() {
-        Some(Box::new(GenericMeasurementProxy::new(FillNodeConfig {
-            direction: fill_node.direction(),
-            fraction: fill_node.fraction(),
-        })))
-    } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
-        Some(Box::new(GenericMeasurementProxy::new(OffsetNodeConfig {
-            offset: offset_node.offset(),
-            rtl_aware: offset_node.rtl_aware(),
-        })))
-    } else if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
-        Some(Box::new(GenericMeasurementProxy::new(text_node.text().to_string())))
-    } else {
-        None
-    }
-}
 
 /// Identifies what type of coordinator this is for debugging and downcast purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,7 +118,7 @@ impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {
 
 impl<'a> Measurable for LayoutModifierCoordinator<'a> {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
-        // Extract a measurement proxy from the node to work around Rust's borrow checker.
+        // Extract a measurement proxy from the node via its create_measurement_proxy() method.
         // In Jetpack Compose, coordinators can hold direct references to nodes, but in Rust
         // we need to extract configuration data first, release the borrow, then perform
         // measurement. This preserves node behavior while avoiding nested borrow panics.
@@ -348,7 +134,8 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
                     if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
                         if let Some(node) = entry_ref.node() {
                             if let Some(layout_modifier) = node.as_layout_node() {
-                                return extract_measurement_proxy(layout_modifier);
+                                // Use the node's own proxy factory method
+                                return layout_modifier.create_measurement_proxy();
                             }
                         }
                     }
@@ -377,7 +164,7 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
                 }
             }
         } else {
-            // Unknown node type - pass through to wrapped coordinator
+            // Node doesn't provide a proxy - pass through to wrapped coordinator
             let placeable = self.wrapped.measure(constraints);
             Size {
                 width: placeable.width(),
@@ -401,7 +188,7 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
                     if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
                         if let Some(node) = entry_ref.node() {
                             if let Some(layout_modifier) = node.as_layout_node() {
-                                return extract_measurement_proxy(layout_modifier);
+                                return layout_modifier.create_measurement_proxy();
                             }
                         }
                     }
@@ -429,7 +216,7 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
                     if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
                         if let Some(node) = entry_ref.node() {
                             if let Some(layout_modifier) = node.as_layout_node() {
-                                return extract_measurement_proxy(layout_modifier);
+                                return layout_modifier.create_measurement_proxy();
                             }
                         }
                     }
@@ -457,7 +244,7 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
                     if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
                         if let Some(node) = entry_ref.node() {
                             if let Some(layout_modifier) = node.as_layout_node() {
-                                return extract_measurement_proxy(layout_modifier);
+                                return layout_modifier.create_measurement_proxy();
                             }
                         }
                     }
@@ -485,7 +272,7 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
                     if let Some(entry_ref) = chain.node_ref_at(self.node_index) {
                         if let Some(node) = entry_ref.node() {
                             if let Some(layout_modifier) = node.as_layout_node() {
-                                return extract_measurement_proxy(layout_modifier);
+                                return layout_modifier.create_measurement_proxy();
                             }
                         }
                     }

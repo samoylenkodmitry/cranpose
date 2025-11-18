@@ -437,6 +437,33 @@ pub trait LayoutModifierNode: ModifierNode {
     fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
         0.0
     }
+
+    /// Creates a measurement proxy for this node that can perform measurement
+    /// without holding a borrow to the modifier chain.
+    ///
+    /// This method enables custom layout modifiers to work with the coordinator
+    /// chain while respecting Rust's borrow checker constraints. The proxy
+    /// should capture a snapshot of the node's current configuration.
+    ///
+    /// The default implementation returns `None`, which causes the coordinator
+    /// to use a passthrough strategy that delegates directly to the wrapped
+    /// content.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// impl LayoutModifierNode for MyCustomLayoutNode {
+    ///     fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
+    ///         Some(Box::new(MyCustomLayoutProxy {
+    ///             // Snapshot node configuration here
+    ///             padding: self.padding,
+    ///         }))
+    ///     }
+    /// }
+    /// ```
+    fn create_measurement_proxy(&self) -> Option<Box<dyn crate::measurement_proxy::MeasurementProxy>> {
+        None
+    }
 }
 
 /// Marker trait for draw-specific modifier nodes.

@@ -611,3 +611,385 @@ fn multiple_temporary_chains_dont_interfere() {
     assert_eq!(ev2.len(), 1, "Handler 2 should receive 1 event");
     assert_eq!(ev2[0], ("handler2", PointerEventKind::Down));
 }
+
+/// Test that custom user-defined layout modifiers can work with the coordinator chain
+/// via the measurement proxy API.
+///
+/// This test validates Phase 1 of the modifier system migration: generic extensibility.
+/// Custom layout modifiers can now provide their own measurement proxies, enabling them
+/// to participate in the layout process without being hardcoded into the coordinator.
+#[test]
+fn custom_layout_modifier_works_via_proxy() {
+    use compose_foundation::{
+        DelegatableNode, LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode,
+        ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
+    };
+    use std::hash::{Hash, Hasher};
+
+    // Define a custom layout modifier that adds extra width
+    #[derive(Debug)]
+    struct CustomWidthNode {
+        extra_width: f32,
+        state: NodeState,
+    }
+
+    impl CustomWidthNode {
+        fn new(extra_width: f32) -> Self {
+            Self {
+                extra_width,
+                state: NodeState::new(),
+            }
+        }
+    }
+
+    impl DelegatableNode for CustomWidthNode {
+        fn node_state(&self) -> &NodeState {
+            &self.state
+        }
+    }
+
+    impl ModifierNode for CustomWidthNode {
+        fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+            context.invalidate(compose_foundation::InvalidationKind::Layout);
+        }
+
+        fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+            Some(self)
+        }
+
+        fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+            Some(self)
+        }
+    }
+
+    impl LayoutModifierNode for CustomWidthNode {
+        fn measure(
+            &self,
+            _context: &mut dyn ModifierNodeContext,
+            measurable: &dyn Measurable,
+            constraints: Constraints,
+        ) -> Size {
+            let placeable = measurable.measure(constraints);
+            Size {
+                width: placeable.width() + self.extra_width,
+                height: placeable.height(),
+            }
+        }
+
+        fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+            measurable.min_intrinsic_width(height) + self.extra_width
+        }
+
+        fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+            measurable.max_intrinsic_width(height) + self.extra_width
+        }
+
+        fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+            measurable.min_intrinsic_height(width)
+        }
+
+        fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+            measurable.max_intrinsic_height(width)
+        }
+
+        // This is the key: provide a measurement proxy
+        fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
+            Some(Box::new(CustomWidthProxy {
+                extra_width: self.extra_width,
+            }))
+        }
+    }
+
+    // Define the measurement proxy
+    struct CustomWidthProxy {
+        extra_width: f32,
+    }
+
+    impl MeasurementProxy for CustomWidthProxy {
+        fn measure_proxy(
+            &self,
+            context: &mut dyn ModifierNodeContext,
+            wrapped: &dyn Measurable,
+            constraints: Constraints,
+        ) -> Size {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.measure(context, wrapped, constraints)
+        }
+
+        fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.min_intrinsic_width(wrapped, height)
+        }
+
+        fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.max_intrinsic_width(wrapped, height)
+        }
+
+        fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.min_intrinsic_height(wrapped, width)
+        }
+
+        fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.max_intrinsic_height(wrapped, width)
+        }
+    }
+
+    // Define the element
+    #[derive(Debug, Clone, PartialEq)]
+    struct CustomWidthElement {
+        extra_width: f32,
+    }
+
+    impl Hash for CustomWidthElement {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            state.write_u32(self.extra_width.to_bits());
+        }
+    }
+
+    impl ModifierNodeElement for CustomWidthElement {
+        type Node = CustomWidthNode;
+
+        fn create(&self) -> Self::Node {
+            CustomWidthNode::new(self.extra_width)
+        }
+
+        fn update(&self, node: &mut Self::Node) {
+            if node.extra_width != self.extra_width {
+                node.extra_width = self.extra_width;
+            }
+        }
+
+        fn capabilities(&self) -> NodeCapabilities {
+            NodeCapabilities::LAYOUT
+        }
+    }
+
+    // Test the custom modifier
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+
+    let elements = vec![modifier_element(CustomWidthElement { extra_width: 20.0 })];
+    chain.update_from_slice(&elements, &mut context);
+
+    assert_eq!(chain.len(), 1);
+    assert!(chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::Layout));
+
+    // Test that the custom modifier correctly adds width
+    let node = chain.node_mut::<CustomWidthNode>(0).unwrap();
+    let measurable = TestMeasurable {
+        intrinsic_width: 100.0,
+        intrinsic_height: 50.0,
+    };
+    let constraints = Constraints {
+        min_width: 0.0,
+        max_width: 300.0,
+        min_height: 0.0,
+        max_height: 200.0,
+    };
+
+    let result = node.measure(&mut context, &measurable, constraints);
+    // Content is 100x50, we add 20 to width, so result is 120x50
+    assert_eq!(result.width, 120.0);
+    assert_eq!(result.height, 50.0);
+
+    // Test intrinsics
+    let intrinsic_width = node.min_intrinsic_width(&measurable, 100.0);
+    assert_eq!(intrinsic_width, 120.0); // 100 + 20
+}
+
+/// Test that exposes state fidelity issue: proxies that reconstruct nodes lose state.
+///
+/// This test demonstrates the limitation of Phase 1's proxy implementation where
+/// `Node::new()` reconstruction loses any internal state accumulated during the
+/// node's lifecycle. A stateful modifier (one that tracks measure count) will have
+/// its state reset on each proxy invocation.
+///
+/// Phase 2 will fix this by making proxies snapshot live node state instead.
+#[test]
+fn stateful_measure_exposes_proxy_reconstruction_issue() {
+    use compose_foundation::{
+        Constraints, DelegatableNode, LayoutModifierNode, Measurable, MeasurementProxy,
+        ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
+    };
+    use std::hash::{Hash, Hasher};
+
+    /// A layout modifier node that counts how many times it's been measured.
+    /// This demonstrates state that should be preserved across proxy invocations.
+    #[derive(Debug)]
+    struct StatefulMeasureNode {
+        state: NodeState,
+        /// Counter that tracks measure calls (simulates node internal state)
+        measure_count: Cell<i32>,
+        /// Initial value to add to width (demonstrates parameter capture)
+        initial_value: i32,
+    }
+
+    impl StatefulMeasureNode {
+        fn new(initial_value: i32) -> Self {
+            Self {
+                state: NodeState::new(),
+                measure_count: Cell::new(0),
+                initial_value,
+            }
+        }
+    }
+
+    impl DelegatableNode for StatefulMeasureNode {
+        fn node_state(&self) -> &NodeState {
+            &self.state
+        }
+    }
+
+    impl ModifierNode for StatefulMeasureNode {
+        fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+            Some(self)
+        }
+
+        fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+            Some(self)
+        }
+    }
+
+    impl LayoutModifierNode for StatefulMeasureNode {
+        fn measure(
+            &self,
+            _context: &mut dyn ModifierNodeContext,
+            measurable: &dyn Measurable,
+            constraints: Constraints,
+        ) -> Size {
+            // Increment the measure count - this is the state we want to preserve
+            let count = self.measure_count.get();
+            self.measure_count.set(count + 1);
+
+            // Measure wrapped content and add initial_value to demonstrate state capture
+            let placeable = measurable.measure(constraints);
+            Size {
+                width: placeable.width() + self.initial_value as f32,
+                height: placeable.height(),
+            }
+        }
+
+        fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
+            // Phase 1 approach: Reconstruct node (LOSES STATE!)
+            // This creates a fresh node with initial_value=10 but measure_count=0
+            Some(Box::new(StatefulMeasureProxy {
+                initial_value: self.initial_value,
+            }))
+        }
+    }
+
+    struct StatefulMeasureProxy {
+        initial_value: i32,
+    }
+
+    impl MeasurementProxy for StatefulMeasureProxy {
+        fn measure_proxy(
+            &self,
+            context: &mut dyn ModifierNodeContext,
+            wrapped: &dyn Measurable,
+            constraints: Constraints,
+        ) -> Size {
+            // Phase 1: Reconstruct the node (simulates current implementation pattern)
+            // This creates a fresh node, losing measure_count state from the original
+            let node = StatefulMeasureNode::new(self.initial_value);
+            node.measure(context, wrapped, constraints)
+        }
+
+        fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+            wrapped.min_intrinsic_width(height) + self.initial_value as f32
+        }
+
+        fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+            wrapped.max_intrinsic_width(height) + self.initial_value as f32
+        }
+
+        fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, _width: f32) -> f32 {
+            wrapped.min_intrinsic_height(_width)
+        }
+
+        fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, _width: f32) -> f32 {
+            wrapped.max_intrinsic_height(_width)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct StatefulMeasureElement {
+        initial_value: i32,
+    }
+
+    impl Hash for StatefulMeasureElement {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.initial_value.hash(state);
+        }
+    }
+
+    impl ModifierNodeElement for StatefulMeasureElement {
+        type Node = StatefulMeasureNode;
+
+        fn create(&self) -> Self::Node {
+            StatefulMeasureNode::new(self.initial_value)
+        }
+
+        fn update(&self, node: &mut Self::Node) {
+            node.initial_value = self.initial_value;
+        }
+
+        fn capabilities(&self) -> NodeCapabilities {
+            NodeCapabilities::LAYOUT
+        }
+    }
+
+    // Test setup: Create a node via the modifier chain
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+
+    let element = StatefulMeasureElement { initial_value: 10 };
+    let elements = vec![modifier_element(element)];
+    chain.update_from_slice(&elements, &mut context);
+
+    assert_eq!(chain.len(), 1);
+
+    // First measurement: Measure directly through the node
+    let node = chain.node::<StatefulMeasureNode>(0).unwrap();
+    let measurable = TestMeasurable {
+        intrinsic_width: 100.0,
+        intrinsic_height: 50.0,
+    };
+    let constraints = Constraints {
+        min_width: 0.0,
+        max_width: 200.0,
+        min_height: 0.0,
+        max_height: 200.0,
+    };
+
+    let size1 = node.measure(&mut context, &measurable, constraints);
+    assert_eq!(size1.width, 110.0); // 100 + 10
+    assert_eq!(size1.height, 50.0);
+
+    // Check that measure_count was incremented
+    let count_after_first = node.measure_count.get();
+    assert_eq!(count_after_first, 1, "First measure should increment count to 1");
+
+    // Second measurement: This time via the proxy
+    // Phase 1's proxy will reconstruct the node, resetting measure_count to 0
+    let proxy = node.create_measurement_proxy().expect("Should have proxy");
+    let size2 = proxy.measure_proxy(&mut context, &measurable, constraints);
+    assert_eq!(size2.width, 110.0); // Still 100 + 10 (initial_value preserved)
+    assert_eq!(size2.height, 50.0);
+
+    // The original node's count should still be 1 (proxy didn't touch it)
+    let count_after_proxy = node.measure_count.get();
+    assert_eq!(
+        count_after_proxy, 1,
+        "Original node count unchanged - proxy creates fresh node"
+    );
+
+    // This demonstrates the Phase 1 limitation:
+    // - The proxy correctly preserves initial_value (constructor parameter)
+    // - But it LOSES measure_count state (internal node state)
+    //
+    // Phase 2 will make proxies snapshot ALL live node state, not just constructor params.
+}

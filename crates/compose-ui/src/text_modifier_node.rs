@@ -21,8 +21,8 @@
 
 use compose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
-    LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
+    LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
+    ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 use std::hash::{Hash, Hasher};
 
@@ -139,6 +139,71 @@ impl LayoutModifierNode for TextModifierNode {
     }
 
     fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
+        self.measure_text_content().height
+    }
+
+    fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
+        Some(Box::new(TextMeasurementProxy {
+            text: self.text.clone(),
+        }))
+    }
+}
+
+/// Measurement proxy for TextModifierNode that snapshots live state.
+///
+/// Phase 2: Instead of reconstructing nodes via `TextModifierNode::new()`, this proxy
+/// directly implements measurement logic using the snapshotted text content.
+struct TextMeasurementProxy {
+    text: String,
+}
+
+impl TextMeasurementProxy {
+    /// Measure the text content dimensions.
+    /// Matches TextModifierNode::measure_text_content() logic.
+    fn measure_text_content(&self) -> Size {
+        let metrics = crate::text::measure_text(&self.text);
+        Size {
+            width: metrics.width,
+            height: metrics.height,
+        }
+    }
+}
+
+impl MeasurementProxy for TextMeasurementProxy {
+    fn measure_proxy(
+        &self,
+        _context: &mut dyn ModifierNodeContext,
+        _measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> Size {
+        // Directly implement text measurement logic (no node reconstruction)
+        let text_size = self.measure_text_content();
+
+        // Constrain text size to the provided constraints
+        let width = text_size
+            .width
+            .clamp(constraints.min_width, constraints.max_width);
+        let height = text_size
+            .height
+            .clamp(constraints.min_height, constraints.max_height);
+
+        // Text is a leaf node - return the text size directly
+        Size { width, height }
+    }
+
+    fn min_intrinsic_width_proxy(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+        self.measure_text_content().width
+    }
+
+    fn max_intrinsic_width_proxy(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+        self.measure_text_content().width
+    }
+
+    fn min_intrinsic_height_proxy(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
+        self.measure_text_content().height
+    }
+
+    fn max_intrinsic_height_proxy(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
         self.measure_text_content().height
     }
 }
