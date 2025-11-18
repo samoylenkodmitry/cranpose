@@ -4,25 +4,31 @@ Concise snapshot of how the modifier system differs from Jetpack Compose and wha
 
 ## Current Snapshot (modifier-specific)
 
-- Modifier nodes, capability masks, and `ModifierKind::Combined` exist and reconcile into a `ModifierNodeChain` (e.g., `crates/compose-foundation/src/modifier.rs`).
-- Layout measurement runs through a coordinator chain, but each coordinator rebuilds hardcoded nodes from config snapshots (`crates/compose-ui/src/layout/coordinator.rs:201-389`) instead of invoking the live modifier node.
-- Layout modifiers only return `Size` (no placement or hit-test hooks); coordinator placement is a pass-through (`compose-foundation/src/modifier.rs:392-439`, `crates/compose-ui/src/layout/coordinator.rs:326-330`), so padding/offset are reapplied manually via `ResolvedModifiers`.
-- `ModifierChainHandle::compute_resolved` still flattens layout data (padding/size/fill/offset) every update, losing ordering and state when phases read the snapshot (`crates/compose-ui/src/modifier/chain.rs:188-224`).
-- `ModifierNodeSlices` collapse draw/pointer/text to “last write wins” instead of ordered chaining; background/shape/text content are reduced to a single slot (`crates/compose-ui/src/modifier/slices.rs:15-176`).
-- Text modifier remains string-only and stateless; proxies clone a new `TextModifierNode` per measure (`crates/compose-ui/src/layout/coordinator.rs:172-195`) with monospaced measure/dummy draw/semantics.
+- **Coordinator Bypass**: `LayoutModifierCoordinator::measure` (`crates/compose-ui/src/layout/coordinator.rs:120`) explicitly checks for a measurement proxy. If `create_measurement_proxy()` returns `None`, the coordinator **skips the node's measure logic entirely** and falls back to measuring the wrapped content directly. This renders the `LayoutModifierNode::measure` default implementation useless for custom modifiers that don't supply a proxy.
+- **Missing Placement API**: `LayoutModifierNode::measure` returns only `Size`. There is no mechanism to return a `MeasureResult` with a placement block (as in Kotlin). Consequently, `LayoutModifierCoordinator::place` is a hardcoded pass-through (`crates/compose-ui/src/layout/coordinator.rs:112`), preventing modifiers from affecting child placement (e.g., offset, alignment).
+- **Flattened Resolution**: `ModifierChainHandle::compute_resolved` (`crates/compose-ui/src/modifier/chain.rs:188`) iterates the chain and flattens standard modifiers (Padding, Size, Offset) into a single `ResolvedModifiers` struct. This loses the interleaving of modifiers (e.g., `padding(10).background(...).padding(20)` becomes just 30 padding and one background).
+- **Slice Coalescing**: `ModifierNodeSlices` (`crates/compose-ui/src/modifier/slices.rs`) collects draw commands and pointer inputs but reduces text content and graphics layers to "last write wins", preventing composition of these effects.
+- **Proxy Dependency**: The system relies heavily on `MeasurementProxy` to avoid borrowing the modifier chain during measure. This is a divergence from Kotlin where the coordinator holds a reference to the live node.
 
 ## Mismatches vs Jetpack Compose
 
-- **Stateless, closed coordinator**: Kotlin keeps a persistent link to each live `LayoutModifierNode` and calls it directly for measure/placement/alignment/lookahead (`/media/huge/composerepo/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/node/LayoutModifierNodeCoordinator.kt:37-224`). Rust downcasts to a hardcoded list, clones a fresh node, and skips unknown/custom nodes (`crates/compose-ui/src/layout/coordinator.rs:201-389`), so stateful/custom layout modifiers cannot participate.
-- **No placement/draw/pointer hooks on layout modifiers**: Layout modifiers cannot emit placement blocks; `LayoutModifierCoordinator::place` just forwards (`crates/compose-ui/src/layout/coordinator.rs:326-330`), and the trait exposes no placement API (`compose-foundation/src/modifier.rs:392-439`). Kotlin’s `MeasureResult` carries placements and alignment lines from each layout modifier.
-- **Flattened snapshots instead of ordered chaining**: Layout/draw/pointer/semantics still read collapsed snapshots (`modifier/chain.rs:188-224`, `modifier/slices.rs:70-176`), so modifier ordering is lost and multiple instances coalesce (e.g., only one background/shape/text survives).
-- **Text pipeline mismatch**: No paragraph/style/cache; measurement proxies recreate text nodes from strings only (`layout/coordinator.rs:172-195`), diverging from Kotlin’s `TextStringSimpleNode` pipeline that caches layout and drives draw/semantics.
+- **Live Node vs. Snapshot Proxy**: Kotlin's `LayoutModifierNodeCoordinator` calls `measure` on the live `LayoutModifierNode`. Rust's coordinator requires the node to produce a `MeasurementProxy` (a snapshot) to participate in measurement. If no proxy is produced, the node is ignored.
+- **Placement Control**: Kotlin's `measure` returns a `MeasureResult` containing a `placeChildren` lambda. Rust's `measure` returns `Size` only, and placement is handled entirely by the coordinator's pass-through logic.
+- **Chain Traversal**: Kotlin traverses the actual node chain for all operations. Rust flattens the chain into `ResolvedModifiers` for layout properties, losing the structural information necessary for correct order of operations in complex chains.
 
 ## Roadmap (integrates “open protocol” proposal)
 
-1) **Generic extensibility**: Make measurement proxy creation an API on `LayoutModifierNode` (factory per node), expose the proxy trait publicly, implement for all built-ins, and delete the hardcoded `extract_measurement_proxy` plus reconstruction path in `LayoutModifierCoordinator`.
-2) **State fidelity**: Proxies snapshot live node state instead of `Node::new(config)`; add a stateful measure test that would currently reset each pass.
-3) **Layout-to-render parity**: Cache text layout results and plumb them into modifier slices/renderers to avoid double layout and missing glyph data.
-4) **Input/focus maturity**: Add focus/key modifier nodes and dispatch that respects the modifier chain, mirroring Compose’s focus/key processing.
+1.  **Fix Layout Modifier Protocol**:
+    - Change `LayoutModifierNode::measure` to return a `MeasureResult` (containing Size and a Placement trait/closure).
+    - Update `LayoutModifierCoordinator` to execute this placement logic.
+    - Remove the "no proxy = skip" behavior; the coordinator should call `measure` on the node (or a proxy of it) and respect the result.
 
-These steps should align Rust behavior with Kotlin’s live-node coordinator while keeping borrow checker workarounds explicit. 
+2.  **Generic Extensibility**:
+    - Ensure all built-in modifiers (Padding, Size, etc.) implement `LayoutModifierNode` correctly.
+    - Deprecate/Remove `ResolvedModifiers` flattening in favor of the coordinator chain handling these properties via the `measure`/`place` protocol.
+
+3.  **State Fidelity**:
+    - Move towards using live nodes or more robust proxies that don't require full reconstruction on every frame.
+
+4.  **Text & Input**:
+    - Align text handling with the node system (TextModifierNode should participate in layout/draw properly, not just export a string). 
