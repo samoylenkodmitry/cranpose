@@ -2,17 +2,12 @@
 
 ## Status: ✅ Core migration complete - coordinators use live nodes, rendering via modifier slices, text 100% through TextModifierNode, debug_chain API available
 
-## Baseline (useful context)
+## Current Architecture
 
-- Modifier chain uses `ModifierKind::Combined`; reconciliation via `ModifierChainHandle` feeds a node
-  chain with capability tracking.
+- Modifier chain uses `ModifierKind::Combined`; reconciliation via `ModifierChainHandle` feeds a node chain with capability tracking.
 - Widgets emit `LayoutNode` + `MeasurePolicy`; dispatch queues keep pointer/focus flags in sync.
-- Built-in layout modifier nodes exist (padding/size/fill/offset/text).
-- Layout measurement goes through a coordinator chain
-  (`crates/compose-ui/src/layout/mod.rs:725`), but `LayoutModifierCoordinator` downcasts to
-  built-ins and recreates them (`crates/compose-ui/src/layout/coordinator.rs:175`) instead of
-  calling live nodes; placement is stubbed (`coordinator.rs:164`) and padding/offset is still
-  accumulated separately as a workaround.
+- Layout modifier nodes (padding/size/fill/offset/text) measured via `MeasurementProxy` pattern.
+- Coordinator chain (`crates/compose-ui/src/layout/mod.rs:725`) measures live nodes and propagates placement.
 
 ## Architecture Overview
 
@@ -22,15 +17,6 @@
 - **Text**: ✅ Text flows 100% through `TextModifierNode` (LayoutModifierNode + DrawModifierNode); `LayoutNodeKind::Text` removed.
 - **Rendering**: ✅ Visual properties (background, graphics_layer, text) render via `modifier_slices`; `ResolvedModifiers` only contains layout data.
 - **Invalidation**: Capability flags drive invalidations through modifier node chain.
-
-## Jetpack Compose reference cues (what we’re missing)
-
-- `LayoutModifierNodeCoordinator` keeps a persistent handle to the live modifier node and measures
-  it directly instead of cloning (`.../LayoutModifierNodeCoordinator.kt:37-195`).
-- The same coordinator drives placement/draw/alignment and wraps the next coordinator for ordering
-  (`LayoutModifierNodeCoordinator.kt:240-280`), so per-node state and lookahead are preserved.
-- Node capabilities are honored per phase; draw/pointer/semantics are dispatched through the node
-  chain rather than flattened snapshots.
 
 ## Completed Gaps ✅
 
@@ -51,17 +37,7 @@
 - `LayoutNodeKind::Text` enum variant removed completely
 - Text nodes report as `LayoutNodeKind::Layout` with content in `modifier_slices`
 - Renderers (pixels, wgpu) updated to use `modifier_slices.text_content()`
-
-## Remaining Gaps
-
-### Reconciliation flattening
-- `ModifierChainHandle::update()` still flattens element vectors on each update
-- However, `ModifierNodeChain` reconciles properly and reuses node state
-- Not a correctness issue, reconciliation works as designed
-
-### Integration testing
-- Need HitTestTarget integration tests for pointer/focus/text paths
-- Current tests validate functionality but not through full dispatch pipeline
+- Dead code removed: obsolete `render_text()` functions deleted from both renderers
 
 ## Completed Work ✅
 
