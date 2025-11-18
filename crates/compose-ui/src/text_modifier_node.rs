@@ -21,8 +21,8 @@
 
 use compose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
-    LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
+    LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode, ModifierNodeContext,
+    ModifierNodeElement, NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 use std::hash::{Hash, Hasher};
 
@@ -140,6 +140,49 @@ impl LayoutModifierNode for TextModifierNode {
 
     fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
         self.measure_text_content().height
+    }
+
+    fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
+        Some(Box::new(TextMeasurementProxy {
+            text: self.text.clone(),
+        }))
+    }
+}
+
+/// Measurement proxy for TextModifierNode.
+struct TextMeasurementProxy {
+    text: String,
+}
+
+impl MeasurementProxy for TextMeasurementProxy {
+    fn measure_proxy(
+        &self,
+        context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> Size {
+        let node = TextModifierNode::new(self.text.clone());
+        node.measure(context, measurable, constraints)
+    }
+
+    fn min_intrinsic_width_proxy(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        let node = TextModifierNode::new(self.text.clone());
+        node.min_intrinsic_width(measurable, height)
+    }
+
+    fn max_intrinsic_width_proxy(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        let node = TextModifierNode::new(self.text.clone());
+        node.max_intrinsic_width(measurable, height)
+    }
+
+    fn min_intrinsic_height_proxy(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        let node = TextModifierNode::new(self.text.clone());
+        node.min_intrinsic_height(measurable, width)
+    }
+
+    fn max_intrinsic_height_proxy(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        let node = TextModifierNode::new(self.text.clone());
+        node.max_intrinsic_height(measurable, width)
     }
 }
 

@@ -611,3 +611,191 @@ fn multiple_temporary_chains_dont_interfere() {
     assert_eq!(ev2.len(), 1, "Handler 2 should receive 1 event");
     assert_eq!(ev2[0], ("handler2", PointerEventKind::Down));
 }
+
+/// Test that custom user-defined layout modifiers can work with the coordinator chain
+/// via the measurement proxy API.
+///
+/// This test validates Phase 1 of the modifier system migration: generic extensibility.
+/// Custom layout modifiers can now provide their own measurement proxies, enabling them
+/// to participate in the layout process without being hardcoded into the coordinator.
+#[test]
+fn custom_layout_modifier_works_via_proxy() {
+    use compose_foundation::{
+        DelegatableNode, LayoutModifierNode, Measurable, MeasurementProxy, ModifierNode,
+        ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
+    };
+    use std::hash::{Hash, Hasher};
+
+    // Define a custom layout modifier that adds extra width
+    #[derive(Debug)]
+    struct CustomWidthNode {
+        extra_width: f32,
+        state: NodeState,
+    }
+
+    impl CustomWidthNode {
+        fn new(extra_width: f32) -> Self {
+            Self {
+                extra_width,
+                state: NodeState::new(),
+            }
+        }
+    }
+
+    impl DelegatableNode for CustomWidthNode {
+        fn node_state(&self) -> &NodeState {
+            &self.state
+        }
+    }
+
+    impl ModifierNode for CustomWidthNode {
+        fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+            context.invalidate(compose_foundation::InvalidationKind::Layout);
+        }
+
+        fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+            Some(self)
+        }
+
+        fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+            Some(self)
+        }
+    }
+
+    impl LayoutModifierNode for CustomWidthNode {
+        fn measure(
+            &self,
+            _context: &mut dyn ModifierNodeContext,
+            measurable: &dyn Measurable,
+            constraints: Constraints,
+        ) -> Size {
+            let placeable = measurable.measure(constraints);
+            Size {
+                width: placeable.width() + self.extra_width,
+                height: placeable.height(),
+            }
+        }
+
+        fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+            measurable.min_intrinsic_width(height) + self.extra_width
+        }
+
+        fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+            measurable.max_intrinsic_width(height) + self.extra_width
+        }
+
+        fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+            measurable.min_intrinsic_height(width)
+        }
+
+        fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+            measurable.max_intrinsic_height(width)
+        }
+
+        // This is the key: provide a measurement proxy
+        fn create_measurement_proxy(&self) -> Option<Box<dyn MeasurementProxy>> {
+            Some(Box::new(CustomWidthProxy {
+                extra_width: self.extra_width,
+            }))
+        }
+    }
+
+    // Define the measurement proxy
+    struct CustomWidthProxy {
+        extra_width: f32,
+    }
+
+    impl MeasurementProxy for CustomWidthProxy {
+        fn measure_proxy(
+            &self,
+            context: &mut dyn ModifierNodeContext,
+            wrapped: &dyn Measurable,
+            constraints: Constraints,
+        ) -> Size {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.measure(context, wrapped, constraints)
+        }
+
+        fn min_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.min_intrinsic_width(wrapped, height)
+        }
+
+        fn max_intrinsic_width_proxy(&self, wrapped: &dyn Measurable, height: f32) -> f32 {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.max_intrinsic_width(wrapped, height)
+        }
+
+        fn min_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.min_intrinsic_height(wrapped, width)
+        }
+
+        fn max_intrinsic_height_proxy(&self, wrapped: &dyn Measurable, width: f32) -> f32 {
+            let node = CustomWidthNode::new(self.extra_width);
+            node.max_intrinsic_height(wrapped, width)
+        }
+    }
+
+    // Define the element
+    #[derive(Debug, Clone, PartialEq)]
+    struct CustomWidthElement {
+        extra_width: f32,
+    }
+
+    impl Hash for CustomWidthElement {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            state.write_u32(self.extra_width.to_bits());
+        }
+    }
+
+    impl ModifierNodeElement for CustomWidthElement {
+        type Node = CustomWidthNode;
+
+        fn create(&self) -> Self::Node {
+            CustomWidthNode::new(self.extra_width)
+        }
+
+        fn update(&self, node: &mut Self::Node) {
+            if node.extra_width != self.extra_width {
+                node.extra_width = self.extra_width;
+            }
+        }
+
+        fn capabilities(&self) -> NodeCapabilities {
+            NodeCapabilities::LAYOUT
+        }
+    }
+
+    // Test the custom modifier
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+
+    let elements = vec![modifier_element(CustomWidthElement { extra_width: 20.0 })];
+    chain.update_from_slice(&elements, &mut context);
+
+    assert_eq!(chain.len(), 1);
+    assert!(chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::Layout));
+
+    // Test that the custom modifier correctly adds width
+    let node = chain.node_mut::<CustomWidthNode>(0).unwrap();
+    let measurable = TestMeasurable {
+        intrinsic_width: 100.0,
+        intrinsic_height: 50.0,
+    };
+    let constraints = Constraints {
+        min_width: 0.0,
+        max_width: 300.0,
+        min_height: 0.0,
+        max_height: 200.0,
+    };
+
+    let result = node.measure(&mut context, &measurable, constraints);
+    // Content is 100x50, we add 20 to width, so result is 120x50
+    assert_eq!(result.width, 120.0);
+    assert_eq!(result.height, 50.0);
+
+    // Test intrinsics
+    let intrinsic_width = node.min_intrinsic_width(&measurable, 100.0);
+    assert_eq!(intrinsic_width, 120.0); // 100 + 20
+}
