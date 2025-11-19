@@ -1555,7 +1555,7 @@ pub fn complex_chain_showcase() {
         });
 
         Text(
-            "Deep chain: padding → size → offset → padding",
+            "Nested: Red → Green → Blue layers",
             Modifier::empty().padding(8.0),
         );
 
@@ -1564,17 +1564,74 @@ pub fn complex_chain_showcase() {
             height: 12.0,
         });
 
+        // Nested backgrounds showcase - creates visible colored borders
+        // Red outer layer
         compose_ui::Box(
             Modifier::empty()
-                .padding(10.0)
-                .then(Modifier::empty().size_points(200.0, 100.0))
-                .then(Modifier::empty().offset(20.0, 0.0))
-                .then(Modifier::empty().padding(5.0))
-                .then(Modifier::empty().background(Color(0.6, 0.3, 0.2, 0.8)))
-                .then(Modifier::empty().rounded_corners(12.0)),
+                .padding(8.0)
+                .then(Modifier::empty().background(Color(0.8, 0.2, 0.2, 0.9)))
+                .then(Modifier::empty().rounded_corners(16.0)),
             BoxSpec::default(),
             || {
-                Text("Complex modifiers!", Modifier::empty().padding(8.0));
+                // Green middle layer
+                compose_ui::Box(
+                    Modifier::empty()
+                        .padding(6.0)
+                        .then(Modifier::empty().background(Color(0.2, 0.7, 0.3, 0.9)))
+                        .then(Modifier::empty().rounded_corners(12.0)),
+                    BoxSpec::default(),
+                    || {
+                        // Blue inner layer
+                        compose_ui::Box(
+                            Modifier::empty()
+                                .padding(12.0)
+                                .then(Modifier::empty().background(Color(0.3, 0.5, 0.9, 0.9)))
+                                .then(Modifier::empty().rounded_corners(8.0)),
+                            BoxSpec::default(),
+                            || {
+                                Text("Nested!", Modifier::empty());
+                            },
+                        );
+                    },
+                );
+            },
+        );
+
+        Spacer(Size {
+            width: 0.0,
+            height: 16.0,
+        });
+
+        Text(
+            "Chain: offset + size + multiple backgrounds",
+            Modifier::empty().padding(8.0),
+        );
+
+        Spacer(Size {
+            width: 0.0,
+            height: 12.0,
+        });
+
+        // Complex modifier chain with offset and sizing - Orange outer, Purple inner
+        compose_ui::Box(
+            Modifier::empty()
+                .offset(20.0, 0.0)
+                .then(Modifier::empty().size_points(180.0, 80.0))
+                .then(Modifier::empty().padding(6.0))
+                .then(Modifier::empty().background(Color(0.9, 0.6, 0.2, 0.9)))
+                .then(Modifier::empty().rounded_corners(10.0)),
+            BoxSpec::default(),
+            || {
+                compose_ui::Box(
+                    Modifier::empty()
+                        .padding(8.0)
+                        .then(Modifier::empty().background(Color(0.5, 0.3, 0.7, 0.9)))
+                        .then(Modifier::empty().rounded_corners(6.0)),
+                    BoxSpec::default(),
+                    || {
+                        Text("Offset + Sized", Modifier::empty());
+                    },
+                );
             },
         );
     });
@@ -1617,12 +1674,12 @@ pub fn dynamic_modifiers_showcase() {
                             height: 50.0,
                         })
                         .then(Modifier::empty().offset(x, y))
-                        .then(Modifier::empty().padding(4.0))
+                        .then(Modifier::empty().padding(6.0))
                         .then(Modifier::empty().background(Color(0.3, 0.6, 0.9, 0.9)))
                         .then(Modifier::empty().rounded_corners(10.0)),
                     BoxSpec::default(),
                     || {
-                        Text("Moving!", Modifier::empty().padding(4.0));
+                        Text("Move", Modifier::empty());
                     },
                 );
             },

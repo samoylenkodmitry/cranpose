@@ -283,23 +283,71 @@ fn test_complex_chain_modifier_ordering() {
     // Validate hierarchy - should now pass after fixing the overflow bug
     validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
 
-    // Render the scene to check draw order
+    // Render the scene to check draw order and nested backgrounds
     let renderer = HeadlessRenderer::new();
     let scene = renderer.render(&layout);
 
-    println!("Render operations: {}", scene.operations().len());
+    println!("\nRender operations: {}", scene.operations().len());
+    let mut background_count = 0;
+    let mut text_count = 0;
+
     for (i, op) in scene.operations().iter().enumerate() {
         match op {
             RenderOp::Primitive { node_id, layer, primitive } => {
-                println!("  [{}] Primitive node={} layer={:?} prim={:?}", i, node_id, layer, primitive);
+                println!("  [{}] Primitive node={} layer={:?}", i, node_id, layer);
+                background_count += 1;
             }
             RenderOp::Text { node_id, rect, value } => {
                 println!("  [{}] Text node={} pos=({:.1},{:.1}) \"{}\"", i, node_id, rect.x, rect.y, value);
+                text_count += 1;
             }
         }
     }
 
-    println!("✓ Complex chain renders correctly");
+    println!("\nBackground primitives: {}", background_count);
+    println!("Text elements: {}", text_count);
+
+    // Nested Box structure creates multiple backgrounds:
+    // - Title background (1)
+    // - First nested boxes: Red outer, Green middle, Blue inner (3)
+    // - Second nested boxes: Orange outer, Purple inner (2)
+    // Total: 1 + 3 + 2 = 6 backgrounds
+    assert_eq!(
+        background_count, 6,
+        "Should have 6 background primitives for nested box structure, got {}",
+        background_count
+    );
+
+    // Should have 5 text elements:
+    // - Title, description1, text1 (Nested!), description2, text2 (Offset + Sized)
+    assert_eq!(
+        text_count, 5,
+        "Should have 5 text elements, got {}",
+        text_count
+    );
+
+    // Validate nested backgrounds are properly rendered
+    // Find the "Nested!" text to verify it's surrounded by colored backgrounds
+    let nested_text = find_box_with_text(layout.root(), "Nested!")
+        .expect("Should find 'Nested!' text");
+    let offset_text = find_box_with_text(layout.root(), "Offset + Sized")
+        .expect("Should find 'Offset + Sized' text");
+
+    println!("\nNested! text at: ({:.1}, {:.1}) size=({:.1}x{:.1})",
+        nested_text.rect.x, nested_text.rect.y,
+        nested_text.rect.width, nested_text.rect.height);
+    println!("Offset + Sized text at: ({:.1}, {:.1}) size=({:.1}x{:.1})",
+        offset_text.rect.x, offset_text.rect.y,
+        offset_text.rect.width, offset_text.rect.height);
+
+    // The offset box should be offset by 20px horizontally
+    assert!(
+        offset_text.rect.x >= 20.0,
+        "Offset box should be offset by at least 20px, got x={:.1}",
+        offset_text.rect.x
+    );
+
+    println!("✓ Complex chain with nested backgrounds renders correctly");
 }
 
 #[test]
@@ -421,12 +469,12 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
                             height: 50.0,
                         })
                         .then(Modifier::empty().offset(x, y))
-                        .then(Modifier::empty().padding(4.0))
+                        .then(Modifier::empty().padding(6.0))
                         .then(Modifier::empty().background(Color(0.3, 0.6, 0.9, 0.9)))
                         .then(Modifier::empty().rounded_corners(10.0)),
                     BoxSpec::default(),
                     || {
-                        Text("Moving!", Modifier::empty().padding(4.0));
+                        Text("Move", Modifier::empty());
                     },
                 );
             },
