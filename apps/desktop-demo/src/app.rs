@@ -1284,7 +1284,9 @@ fn modifier_showcase_tab() {
         Modifier::empty()
             .fill_max_width()
             .then(Modifier::empty().padding(8.0)),
-        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
+        RowSpec::new()
+            .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
+            .vertical_alignment(VerticalAlignment::Top),
         move || {
             // Left panel - showcase selector
             Column(
@@ -1600,19 +1602,29 @@ pub fn dynamic_modifiers_showcase() {
         let x = (current_frame as f32 * 10.0) % 200.0;
         let y = 50.0;
 
+        // Wrap moving box in a container with explicit size to prevent overflow
         compose_ui::Box(
             Modifier::empty()
-                .size(Size {
-                    width: 50.0,
-                    height: 50.0,
-                })
-                .then(Modifier::empty().offset(x, y))
-                .then(Modifier::empty().padding(4.0))
-                .then(Modifier::empty().background(Color(0.3, 0.6, 0.9, 0.9)))
-                .then(Modifier::empty().rounded_corners(10.0)),
+                .size_points(250.0, 150.0)
+                .then(Modifier::empty().background(Color(0.05, 0.05, 0.15, 0.5)))
+                .then(Modifier::empty().rounded_corners(8.0)),
             BoxSpec::default(),
-            || {
-                Text("Moving!", Modifier::empty().padding(4.0));
+            move || {
+                compose_ui::Box(
+                    Modifier::empty()
+                        .size(Size {
+                            width: 50.0,
+                            height: 50.0,
+                        })
+                        .then(Modifier::empty().offset(x, y))
+                        .then(Modifier::empty().padding(4.0))
+                        .then(Modifier::empty().background(Color(0.3, 0.6, 0.9, 0.9)))
+                        .then(Modifier::empty().rounded_corners(10.0)),
+                    BoxSpec::default(),
+                    || {
+                        Text("Moving!", Modifier::empty().padding(4.0));
+                    },
+                );
             },
         );
 

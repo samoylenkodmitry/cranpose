@@ -1,3 +1,4 @@
+use compose_core::MutableState;
 use compose_testing::ComposeTestRule;
 use compose_ui::{HeadlessRenderer, LayoutBox, LayoutEngine, LayoutTree, RenderOp, Size};
 
@@ -313,13 +314,137 @@ fn test_dynamic_modifiers_size_changes() {
     let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0)
         .expect("Should compute layout");
 
-    println!("=== Dynamic Modifiers ===");
+    println!("=== Dynamic Modifiers (Initial) ===");
     println!("{}", dump_layout_tree(layout.root(), 0));
 
-    // Validate hierarchy
-    validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid");
+    // Validate hierarchy at frame 0
+    validate_layout_hierarchy(layout.root()).expect("Layout hierarchy should be valid at frame 0");
 
     println!("✓ Dynamic modifiers render correctly");
+}
+
+#[test]
+fn test_dynamic_modifiers_frame_advancement() {
+    let mut rule = ComposeTestRule::new();
+    let runtime = rule.runtime_handle();
+    let frame = MutableState::with_runtime(0i32, runtime.clone());
+
+    rule.set_content({
+        let frame = frame.clone();
+        move || {
+            let frame_inner = frame.clone();
+            dynamic_modifiers_showcase_with_frame(frame_inner);
+        }
+    })
+    .expect("Dynamic modifiers should render");
+
+    // Test at frame 0
+    let layout0 = compute_layout_from_rule(&mut rule, 800.0, 600.0)
+        .expect("Should compute layout at frame 0");
+    println!("\n=== Dynamic Modifiers Frame 0 ===");
+    println!("{}", dump_layout_tree(layout0.root(), 0));
+    validate_layout_hierarchy(layout0.root()).expect("Layout should be valid at frame 0");
+
+    // Advance to frame 5 (x = 50)
+    frame.set(5);
+    rule.pump_until_idle().expect("Should recompose after frame advance");
+    let layout5 = compute_layout_from_rule(&mut rule, 800.0, 600.0)
+        .expect("Should compute layout at frame 5");
+    println!("\n=== Dynamic Modifiers Frame 5 (x=50) ===");
+    println!("{}", dump_layout_tree(layout5.root(), 0));
+    validate_layout_hierarchy(layout5.root()).expect("Layout should be valid at frame 5");
+
+    // Advance to frame 10 (x = 100)
+    frame.set(10);
+    rule.pump_until_idle().expect("Should recompose after frame advance");
+    let layout10 = compute_layout_from_rule(&mut rule, 800.0, 600.0)
+        .expect("Should compute layout at frame 10");
+    println!("\n=== Dynamic Modifiers Frame 10 (x=100) ===");
+    println!("{}", dump_layout_tree(layout10.root(), 0));
+    validate_layout_hierarchy(layout10.root()).expect("Layout should be valid at frame 10");
+
+    // Advance to frame 19 (x = 190, close to boundary)
+    frame.set(19);
+    rule.pump_until_idle().expect("Should recompose after frame advance");
+    let layout19 = compute_layout_from_rule(&mut rule, 800.0, 600.0)
+        .expect("Should compute layout at frame 19");
+    println!("\n=== Dynamic Modifiers Frame 19 (x=190) ===");
+    println!("{}", dump_layout_tree(layout19.root(), 0));
+
+    // This should expose the bug - box at x=190 with size 50 extends to 240
+    // but parent Column is likely much narrower
+    match validate_layout_hierarchy(layout19.root()) {
+        Ok(_) => println!("✓ Layout valid at frame 19"),
+        Err(e) => {
+            println!("✗ BUG FOUND at frame 19: {}", e);
+            panic!("Layout hierarchy validation failed at frame 19: {}", e);
+        }
+    }
+
+    println!("✓ Dynamic modifiers handle frame advancement correctly");
+}
+
+// Helper function that takes frame as parameter for testing
+fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
+    use compose_ui::*;
+
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        Text(
+            "=== Dynamic Modifiers ===",
+            Modifier::empty()
+                .padding(12.0)
+                .then(Modifier::empty().background(Color(1.0, 1.0, 1.0, 0.1)))
+                .then(Modifier::empty().rounded_corners(14.0)),
+        );
+
+        Spacer(Size {
+            width: 0.0,
+            height: 16.0,
+        });
+
+        let current_frame = frame.get();
+        let x = (current_frame as f32 * 10.0) % 200.0;
+        let y = 50.0;
+
+        // Wrap moving box in a container with explicit size to prevent overflow
+        compose_ui::Box(
+            Modifier::empty()
+                .size_points(250.0, 150.0)
+                .then(Modifier::empty().background(Color(0.05, 0.05, 0.15, 0.5)))
+                .then(Modifier::empty().rounded_corners(8.0)),
+            BoxSpec::default(),
+            move || {
+                compose_ui::Box(
+                    Modifier::empty()
+                        .size(Size {
+                            width: 50.0,
+                            height: 50.0,
+                        })
+                        .then(Modifier::empty().offset(x, y))
+                        .then(Modifier::empty().padding(4.0))
+                        .then(Modifier::empty().background(Color(0.3, 0.6, 0.9, 0.9)))
+                        .then(Modifier::empty().rounded_corners(10.0)),
+                    BoxSpec::default(),
+                    || {
+                        Text("Moving!", Modifier::empty().padding(4.0));
+                    },
+                );
+            },
+        );
+
+        Spacer(Size {
+            width: 0.0,
+            height: 16.0,
+        });
+
+        Text(
+            format!("Frame: {}, X: {:.1}", current_frame, x),
+            Modifier::empty()
+                .padding(8.0)
+                .then(Modifier::empty().background(Color(0.2, 0.2, 0.3, 0.6)))
+                .then(Modifier::empty().rounded_corners(10.0)),
+        );
+    });
 }
 
 #[test]
