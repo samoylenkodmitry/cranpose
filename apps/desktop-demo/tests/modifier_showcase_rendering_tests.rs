@@ -165,7 +165,7 @@ fn test_simple_card_renders_correctly() {
     println!("=== Simple Card Tree Structure ===\n{}", tree);
 
     // Validate structure exists
-    assert!(tree.contains("LayoutNode"), "Should contain LayoutNode");
+    assert!(tree.contains("dyn compose_core::Node"), "Should contain Node");
 
     // Count nodes - should have consistent structure
     let root = rule.root_id();
@@ -185,7 +185,7 @@ fn test_positioned_boxes_renders_correctly() {
     println!("=== Positioned Boxes Tree Structure ===\n{}", tree);
 
     // Validate structure
-    assert!(tree.contains("LayoutNode"), "Should contain LayoutNode");
+    assert!(tree.contains("dyn compose_core::Node"), "Should contain Node");
 
     let initial_count = rule.applier_mut().len();
     println!("Total nodes in positioned boxes: {}", initial_count);
@@ -401,12 +401,18 @@ fn test_modifier_showcase_recomposition_stability() {
     rule.set_content({
         let showcase_index = showcase_index.clone();
         move || {
-            match showcase_index.get() {
-                0 => simple_card_showcase(),
-                1 => positioned_boxes_showcase(),
-                2 => dynamic_modifiers_showcase(0),
-                _ => simple_card_showcase(),
-            }
+            let showcase_index_inner = showcase_index.clone();
+            Column(Modifier::empty(), ColumnSpec::default(), move || {
+                let current_index = showcase_index_inner.get();
+                compose_core::with_key(&current_index, || {
+                    match current_index {
+                        0 => simple_card_showcase(),
+                        1 => positioned_boxes_showcase(),
+                        2 => dynamic_modifiers_showcase(0),
+                        _ => simple_card_showcase(),
+                    }
+                });
+            });
         }
     })
     .expect("Initial showcase should render");

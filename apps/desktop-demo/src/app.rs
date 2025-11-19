@@ -1366,8 +1366,9 @@ fn modifier_showcase_tab() {
                     .then(Modifier::empty().padding(16.0)),
                 ColumnSpec::default(),
                 {
-                    let showcase_to_render = selected_showcase.get();
+                    let selected_showcase_inner = selected_showcase.clone();
                     move || {
+                        let showcase_to_render = selected_showcase_inner.get();
                         compose_core::with_key(&showcase_to_render, || {
                             match showcase_to_render {
                                 ShowcaseType::SimpleCard => simple_card_showcase(),
