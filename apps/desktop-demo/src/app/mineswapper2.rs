@@ -1,29 +1,14 @@
-use compose_core::{useState, MutableState};
+use compose_core::useState;
 use compose_ui::{
     composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
     Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
 };
-use std::{
-    cell::RefCell,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MineswapperTool {
     Reveal,
     Flag,
-}
-
-thread_local! {
-    static SHARED_TOOL_STATE: RefCell<Option<MutableState<MineswapperTool>>> = RefCell::new(None);
-}
-
-pub fn set_shared_tool_state(state: &MutableState<MineswapperTool>) {
-    SHARED_TOOL_STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
-}
-
-pub fn shared_tool_state() -> Option<MutableState<MineswapperTool>> {
-    SHARED_TOOL_STATE.with(|cell| cell.borrow().clone())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,11 +239,7 @@ fn random_seed() -> u64 {
 pub fn mineswapper2_tab() {
     let preset_state = useState(|| GRID_PRESETS[0]);
     let game_state = useState(|| MineswapperGame::new_from_preset(GRID_PRESETS[0], random_seed()));
-    let flag_mode = shared_tool_state().unwrap_or_else(|| {
-        let state = useState(|| MineswapperTool::Reveal);
-        set_shared_tool_state(&state);
-        state
-    });
+    let flag_mode = useState(|| MineswapperTool::Reveal);
 
     Column(
         Modifier::empty()
