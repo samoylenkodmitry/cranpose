@@ -556,58 +556,49 @@ fn render_cell(
     let is_mine = grid.mines[row][col];
     let adjacent_count = grid.adjacent_counts[row][col];
 
-    let bg_color = match cell_state {
-        CellState::Hidden => Color(0.3, 0.35, 0.45, 1.0),
-        CellState::Flagged => Color(0.9, 0.6, 0.2, 1.0),
-        CellState::Revealed => Color(0.15, 0.18, 0.25, 1.0),
+    // Compute text content and color together
+    let (bg_color, text_content) = match cell_state {
+        CellState::Hidden => (Color(0.3, 0.35, 0.45, 1.0), String::new()),
+        CellState::Flagged => (Color(0.9, 0.6, 0.2, 1.0), "🚩".to_string()),
+        CellState::Revealed => {
+            if is_mine {
+                (Color(0.8, 0.2, 0.2, 1.0), "💣".to_string())
+            } else if adjacent_count > 0 {
+                (Color(0.15, 0.18, 0.25, 1.0), adjacent_count.to_string())
+            } else {
+                (Color(0.15, 0.18, 0.25, 1.0), String::new())
+            }
+        }
     };
 
-    // Special color for mines
-    let bg_color = if cell_state == CellState::Revealed && is_mine {
-        Color(0.8, 0.2, 0.2, 1.0)
-    } else {
-        bg_color
-    };
-
-    // Use with_key to ensure each cell has a unique identity, including its state
-    // This ensures cells are properly recreated when state changes
-    compose_core::with_key(&(row, col, cell_state as u8), || {
-        Button(
-            Modifier::empty()
-                .size_points(35.0, 35.0)
-                .rounded_corners(6.0)
-                .draw_behind(move |scope| {
-                    scope.draw_round_rect(Brush::solid(bg_color), CornerRadii::uniform(6.0));
-                })
-                .padding(2.0),
-            {
-                let grid = grid_state.clone();
-                let flag_mode = flag_mode.clone();
-                move || {
-                    let mut current_grid = grid.get();
-                    let is_flag_mode = flag_mode.get();
-
-                    if is_flag_mode {
-                        current_grid.toggle_flag(row, col);
-                    } else {
-                        current_grid.reveal(row, col);
-                    }
-
-                    grid.set(current_grid);
-                }
-            },
+    Button(
+        Modifier::empty()
+            .size_points(35.0, 35.0)
+            .rounded_corners(6.0)
+            .draw_behind(move |scope| {
+                scope.draw_round_rect(Brush::solid(bg_color), CornerRadii::uniform(6.0));
+            })
+            .padding(2.0),
+        {
+            let grid = grid_state.clone();
+            let flag_mode = flag_mode.clone();
             move || {
-                // Determine text content based on cell state
-                if cell_state == CellState::Flagged {
-                    Text("🚩", Modifier::empty());
-                } else if cell_state == CellState::Revealed {
-                    if is_mine {
-                        Text("💣", Modifier::empty());
-                    } else if adjacent_count > 0 {
-                        Text(adjacent_count.to_string(), Modifier::empty());
-                    }
+                let mut current_grid = grid.get();
+                let is_flag_mode = flag_mode.get();
+
+                if is_flag_mode {
+                    current_grid.toggle_flag(row, col);
+                } else {
+                    current_grid.reveal(row, col);
                 }
-            },
-        );
-    });
+
+                grid.set(current_grid);
+            }
+        },
+        move || {
+            if !text_content.is_empty() {
+                Text(text_content.clone(), Modifier::empty());
+            }
+        },
+    );
 }
