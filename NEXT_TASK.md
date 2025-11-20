@@ -25,7 +25,7 @@
 
 ## Current Status: Production Ready 🚀
 
-All 460+ workspace tests passing. The modifier system has achieved true 1:1 parity with Jetpack Compose's architecture.
+All 460+ workspace tests passing. The modifier system has achieved true 1:1 parity with Jetpack Compose's architecture. The milestone text above stays identical to `main` so future rebases remain conflict-free while we reconcile the branch-specific gaps listed below.
 
 ---
 

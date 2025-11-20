@@ -35,7 +35,7 @@ Concise snapshot of how the modifier system differs from Jetpack Compose and wha
 
 ---
 
-This edition merges `main`'s parity claims with the file-path-specific gaps previously documented so rebasing keeps both sets of facts.
+This edition merges `main`'s parity claims with the file-path-specific gaps previously documented so rebasing keeps both sets of facts. The "complete" claims below remain verbatim from `main`'s November 2025 snapshot; the reality checks call out what is still pending on this branch so future rebases won't drop either perspective.
 
 ## ✅ What `main` reports as complete (Nov 2025)
 - **Live Node References**: Coordinators hold `Rc<RefCell<Box<dyn ModifierNode>>>` directly, matching Kotlin's object references.
