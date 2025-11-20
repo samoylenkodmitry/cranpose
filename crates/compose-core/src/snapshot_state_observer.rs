@@ -1,6 +1,8 @@
 // Observer callbacks use Arc for shared ownership but may capture non-Send types.
 // This is safe because callbacks are always invoked on the UI thread where they were created.
 #![allow(clippy::arc_with_non_send_sync)]
+// Complex types are inherent to the observer pattern with nested callbacks and state tracking
+#![allow(clippy::type_complexity)]
 
 use crate::collections::map::HashSet;
 use crate::snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId};

@@ -120,6 +120,7 @@ pub(crate) enum DrawPlacement {
     Overlay,
 }
 
+#[allow(clippy::too_many_arguments)] // Render operations need all style and placement parameters
 pub(crate) fn apply_draw_commands(
     commands: &[DrawCommand],
     placement: DrawPlacement,

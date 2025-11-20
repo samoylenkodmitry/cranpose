@@ -3,9 +3,6 @@
 //! This renderer uses WGPU for cross-platform GPU support across
 //! desktop (Windows/Mac/Linux), web (WebGPU), and mobile (Android/iOS).
 
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::type_complexity)]
-
 mod pipeline;
 mod render;
 mod scene;

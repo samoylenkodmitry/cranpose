@@ -736,6 +736,7 @@ impl LayoutBuilderState {
         use compose_foundation::NodeCapabilities;
 
         // Collect layout node information from the modifier chain
+        #[allow(clippy::type_complexity)] // Tuple of (index, boxed trait object) is reasonable for modifier nodes
         let mut layout_node_data: Vec<(usize, Rc<RefCell<Box<dyn compose_foundation::ModifierNode>>>)> = Vec::new();
         let mut padding = EdgeInsets::default();
         let mut offset = Point::default();
@@ -1104,6 +1105,7 @@ impl VecPools {
         }
     }
 
+    #[allow(clippy::type_complexity)] // Returns internal Vec references for layout operations
     fn parts(
         &mut self,
     ) -> (
@@ -1232,6 +1234,7 @@ struct LayoutChildMeasurable {
 }
 
 impl LayoutChildMeasurable {
+    #[allow(clippy::too_many_arguments)] // Constructor needs all layout state for child measurement
     fn new(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         node_id: NodeId,

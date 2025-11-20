@@ -48,6 +48,7 @@ impl GlobalSnapshot {
 }
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)] // RefCell::new is not const-stable yet
     static GLOBAL_SNAPSHOT: RefCell<Option<Arc<GlobalSnapshot>>> = RefCell::new(None);
 }
 

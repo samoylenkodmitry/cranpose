@@ -1,9 +1,5 @@
 //! High level UI primitives built on top of the Compose core runtime.
 
-// Structural lints - UI code inherently has complex types and many-argument layout functions
-#![allow(clippy::type_complexity)]
-#![allow(clippy::too_many_arguments)]
-
 use compose_core::{location_key, MemoryApplier};
 pub use compose_core::{Composition, Key};
 pub use compose_macros::composable;

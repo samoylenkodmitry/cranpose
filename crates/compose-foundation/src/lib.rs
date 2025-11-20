@@ -1,8 +1,6 @@
 //! Foundation elements for Compose-RS: modifiers, input, and core functionality
 
 #![allow(non_snake_case)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::new_without_default)]
 
 pub mod modifier;
 pub mod modifier_helpers;
@@ -25,7 +23,10 @@ pub mod prelude {
         ModifierNodeContext, ModifierNodeElement, PointerInputNode, SemanticsNode, Size,
     };
     pub use crate::measurement_proxy::*;
-    
+
+    #[allow(unused_imports)] // Helper module exists for API compatibility
+    pub use crate::modifier_helpers::*;
+
     pub use crate::nodes::input::prelude::*;
     // Re-export the helper macros for convenience
     pub use crate::{

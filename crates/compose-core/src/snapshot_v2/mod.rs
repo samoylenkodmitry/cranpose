@@ -326,6 +326,7 @@ impl AnySnapshot {
 
 thread_local! {
     // Thread-local storage for the current snapshot.
+    #[allow(clippy::missing_const_for_thread_local)] // RefCell::new is not const-stable yet
     static CURRENT_SNAPSHOT: RefCell<Option<AnySnapshot>> = RefCell::new(None);
 }
 
@@ -637,6 +638,7 @@ pub(crate) struct SnapshotState {
     /// Write observer, if any.
     pub(crate) write_observer: Option<WriteObserver>,
     /// Modified state objects.
+    #[allow(clippy::type_complexity)] // HashMap value is (Arc, SnapshotId) - reasonable for tracking state
     pub(crate) modified: RefCell<HashMap<StateObjectId, (Arc<dyn StateObject>, SnapshotId)>>,
     /// Optional callback invoked once when disposed.
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,

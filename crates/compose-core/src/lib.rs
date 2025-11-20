@@ -1,8 +1,4 @@
 #![doc = r"Core runtime pieces for the Compose-RS experiment."]
-// Structural lints - complex types are inherent to a UI framework with deep composition trees
-#![allow(clippy::type_complexity)]
-// Thread-local initialization - we intentionally use non-const initializers in some places
-#![allow(clippy::missing_const_for_thread_local)]
 
 pub extern crate self as compose_core;
 
@@ -430,6 +426,7 @@ pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> 
 
 pub struct ProvidedValue {
     key: LocalKey,
+    #[allow(clippy::type_complexity)] // Closure returns trait object for flexible local values
     apply: Box<dyn Fn(&Composer) -> Rc<dyn Any>>, // FUTURE(no_std): return arena-backed local storage pointer.
 }
 
@@ -1058,9 +1055,12 @@ impl MemoryApplier {
         Ok(f(typed))
     }
 
-    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.nodes.iter().filter(|n| n.is_some()).count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn set_runtime_handle(&mut self, handle: RuntimeHandle) {
@@ -2336,10 +2336,7 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
     where
         I: IntoIterator<Item = T>,
     {
-        #[allow(clippy::useless_conversion)]
-        {
-            self.state.update(|values| values.extend(iter.into_iter()));
-        }
+        self.state.update(|values| values.extend(iter));
     }
 
     pub fn insert(&self, index: usize, value: T) {
@@ -2448,10 +2445,7 @@ where
     where
         I: IntoIterator<Item = (K, V)>,
     {
-        #[allow(clippy::useless_conversion)]
-        {
-            self.state.update(|map| map.extend(iter.into_iter()));
-        }
+        self.state.update(|map| map.extend(iter));
         // extend returns (), but update requires returning something: we can just rely on ()
     }
 
@@ -2613,11 +2607,8 @@ pub struct CallbackHolder {
 
 impl CallbackHolder {
     /// Create a new holder with a no-op callback so that callers can immediately invoke it.
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Self {
-            rc: Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)),
-        }
+        Self::default()
     }
 
     /// Replace the stored callback with a new closure provided by the caller.
@@ -2633,6 +2624,14 @@ impl CallbackHolder {
         let rc = self.rc.clone();
         move || {
             (rc.borrow_mut())();
+        }
+    }
+}
+
+impl Default for CallbackHolder {
+    fn default() -> Self {
+        Self {
+            rc: Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)),
         }
     }
 }
