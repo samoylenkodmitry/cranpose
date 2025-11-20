@@ -12,6 +12,7 @@ use compose_ui::{
 use std::cell::RefCell;
 
 mod mineswapper2;
+use mineswapper2::MineswapperTool;
 
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = RefCell::new(None);
@@ -101,6 +102,8 @@ fn random() -> i32 {
 #[composable]
 pub fn combined_app() {
     let active_tab = compose_core::useState(|| DemoTab::Counter);
+    let mineswapper_tool_state = compose_core::useState(|| MineswapperTool::Reveal);
+    mineswapper2::set_shared_tool_state(&mineswapper_tool_state);
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab.clone());
     });
@@ -172,7 +175,10 @@ pub fn combined_app() {
                 DemoTab::Async => async_runtime_example(),
                 DemoTab::Layout => recursive_layout_example(),
                 DemoTab::ModifierShowcase => modifier_showcase_tab(),
-                DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
+                DemoTab::Mineswapper2 => {
+                    mineswapper2::set_shared_tool_state(&mineswapper_tool_state);
+                    mineswapper2::mineswapper2_tab()
+                }
             });
         },
     );
@@ -888,6 +894,7 @@ fn counter_app() {
                     let pointer_position = pointer_position_main.clone();
                     let pointer_down = pointer_down_main.clone();
                     let wave = wave_main.clone();
+                    let mineswapper_tool_state = mineswapper2::shared_tool_state();
                     Text(
                         "Compose-RS Playground",
                         Modifier::empty()
@@ -1228,6 +1235,42 @@ fn counter_app() {
                             );
                         },
                     );
+
+                    if let Some(tool_state) = mineswapper_tool_state.clone() {
+                        let indicator_tool_state = tool_state.clone();
+                        compose_ui::Box(
+                            Modifier::empty()
+                                .size(Size {
+                                    width: 36.0,
+                                    height: 36.0,
+                                })
+                                .graphics_layer(GraphicsLayer {
+                                    translation_x: pointer_position.get().x - 18.0,
+                                    translation_y: pointer_position.get().y - 18.0,
+                                    ..GraphicsLayer::default()
+                                })
+                                .draw_behind(move |scope| {
+                                    let mode = indicator_tool_state.get();
+                                    let color = match mode {
+                                        MineswapperTool::Reveal => Color(0.18, 0.45, 0.78, 0.9),
+                                        MineswapperTool::Flag => Color(0.70, 0.25, 0.32, 0.9),
+                                    };
+                                    scope.draw_round_rect(
+                                        Brush::solid(color),
+                                        CornerRadii::uniform(12.0),
+                                    );
+                                }),
+                            BoxSpec::default(),
+                            move || {
+                                let mode = tool_state.get();
+                                let label = match mode {
+                                    MineswapperTool::Reveal => "⛏️",
+                                    MineswapperTool::Flag => "🚩",
+                                };
+                                Text(label, Modifier::empty().padding(6.0));
+                            },
+                        );
+                    }
                 }
             },
         );

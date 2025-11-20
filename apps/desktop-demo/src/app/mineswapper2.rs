@@ -1,9 +1,30 @@
-use compose_core::useState;
+use compose_core::{useState, MutableState};
 use compose_ui::{
     composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
     Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    cell::RefCell,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MineswapperTool {
+    Reveal,
+    Flag,
+}
+
+thread_local! {
+    static SHARED_TOOL_STATE: RefCell<Option<MutableState<MineswapperTool>>> = RefCell::new(None);
+}
+
+pub fn set_shared_tool_state(state: &MutableState<MineswapperTool>) {
+    SHARED_TOOL_STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+}
+
+pub fn shared_tool_state() -> Option<MutableState<MineswapperTool>> {
+    SHARED_TOOL_STATE.with(|cell| cell.borrow().clone())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GridPreset {
@@ -233,7 +254,11 @@ fn random_seed() -> u64 {
 pub fn mineswapper2_tab() {
     let preset_state = useState(|| GRID_PRESETS[0]);
     let game_state = useState(|| MineswapperGame::new_from_preset(GRID_PRESETS[0], random_seed()));
-    let flag_mode = useState(|| false);
+    let flag_mode = shared_tool_state().unwrap_or_else(|| {
+        let state = useState(|| MineswapperTool::Reveal);
+        set_shared_tool_state(&state);
+        state
+    });
 
     Column(
         Modifier::empty()
@@ -357,14 +382,19 @@ pub fn mineswapper2_tab() {
                                         );
                                     })
                                     .padding(10.0),
-                                move || mode_toggle.set(!mode_toggle.get()),
+                                move || {
+                                    let next_mode = match mode_toggle.get() {
+                                        MineswapperTool::Reveal => MineswapperTool::Flag,
+                                        MineswapperTool::Flag => MineswapperTool::Reveal,
+                                    };
+                                    mode_toggle.set(next_mode);
+                                },
                                 {
                                     let mode_label = flag_mode.clone();
                                     move || {
-                                        let label = if mode_label.get() {
-                                            "Flag mode"
-                                        } else {
-                                            "Reveal mode"
+                                        let label = match mode_label.get() {
+                                            MineswapperTool::Flag => "Flag mode",
+                                            MineswapperTool::Reveal => "Reveal mode",
                                         };
                                         Text(label, Modifier::empty().padding(4.0));
                                     }
@@ -385,7 +415,7 @@ pub fn mineswapper2_tab() {
                     "You hit a mine!"
                 } else if game.is_won {
                     "You cleared the field!"
-                } else if flag_mode_value {
+                } else if flag_mode_value == MineswapperTool::Flag {
                     "Flag cells you suspect contain mines"
                 } else {
                     "Reveal safe cells to clear the board"
@@ -485,11 +515,12 @@ pub fn mineswapper2_tab() {
                                                         CornerRadii::uniform(8.0),
                                                     );
                                                 }),
-                                            move || {
-                                                if mode_state.get() {
+                                            move || match mode_state.get() {
+                                                MineswapperTool::Flag => {
                                                     game_action
                                                         .update(|game| game.toggle_flag(x, y));
-                                                } else {
+                                                }
+                                                MineswapperTool::Reveal => {
                                                     game_action.update(|game| game.reveal(x, y));
                                                 }
                                             },
