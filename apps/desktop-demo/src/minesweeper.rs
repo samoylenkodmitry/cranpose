@@ -654,32 +654,33 @@ fn render_cell(
     row: usize,
     col: usize,
 ) {
-    // Use with_key to ensure each cell has a unique identity
-    compose_core::with_key(&(row, col), || {
-        let grid = grid_state.get();
+    let grid = grid_state.get();
 
-        // Safety check: ensure we're within grid bounds
-        if row >= grid.height || col >= grid.width {
-            return;
-        }
+    // Safety check: ensure we're within grid bounds
+    if row >= grid.height || col >= grid.width {
+        return;
+    }
 
-        let cell_state = grid.states[row][col];
-        let is_mine = grid.mines[row][col];
-        let adjacent_count = grid.adjacent_counts[row][col];
+    let cell_state = grid.states[row][col];
+    let is_mine = grid.mines[row][col];
+    let adjacent_count = grid.adjacent_counts[row][col];
 
-        let bg_color = match cell_state {
-            CellState::Hidden => Color(0.3, 0.35, 0.45, 1.0),
-            CellState::Flagged => Color(0.9, 0.6, 0.2, 1.0),
-            CellState::Revealed => Color(0.15, 0.18, 0.25, 1.0),
-        };
+    let bg_color = match cell_state {
+        CellState::Hidden => Color(0.3, 0.35, 0.45, 1.0),
+        CellState::Flagged => Color(0.9, 0.6, 0.2, 1.0),
+        CellState::Revealed => Color(0.15, 0.18, 0.25, 1.0),
+    };
 
-        // Special color for mines
-        let bg_color = if cell_state == CellState::Revealed && is_mine {
-            Color(0.8, 0.2, 0.2, 1.0)
-        } else {
-            bg_color
-        };
+    // Special color for mines
+    let bg_color = if cell_state == CellState::Revealed && is_mine {
+        Color(0.8, 0.2, 0.2, 1.0)
+    } else {
+        bg_color
+    };
 
+    // Use with_key to ensure each cell has a unique identity, including its state
+    // This ensures cells are properly recreated when state changes
+    compose_core::with_key(&(row, col, cell_state as u8), || {
         Button(
             Modifier::empty()
                 .size_points(35.0, 35.0)
