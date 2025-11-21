@@ -3993,3 +3993,22 @@ fn test_composition_with_backend(backend: SlotBackendKind) {
 
     assert_eq!(recompose_count.get(), 2, "Should have composed twice");
 }
+
+#[test]
+fn mutable_state_is_copy_and_capture_friendly() {
+    let mut composition = Composition::new(MemoryApplier::new());
+
+    composition.render(0, || {
+        let state = compose_core::useState(|| 0);
+
+        let mut bump: Box<dyn FnMut()> = Box::new(move || {
+            // No clone needed even though `state` is reused after being captured.
+            state.set(state.get() + 1);
+        });
+
+        bump();
+        bump();
+
+        assert_eq!(state.get(), 2);
+    });
+}

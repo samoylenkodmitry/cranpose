@@ -388,7 +388,7 @@ where
 
 #[allow(non_snake_case)]
 pub fn useState<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
-    remember(|| mutableStateOf(init())).with(|state| state.clone())
+    remember(|| mutableStateOf(init())).with(|state| *state)
 }
 
 #[allow(deprecated)]
@@ -2171,17 +2171,22 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     }
 }
 
+/// Read-only handle to tracked state. The backing allocation is leaked so the
+/// handle can be `Copy`, which keeps capture sites clone-free.
 pub struct State<T: Clone + 'static> {
-    inner: Rc<MutableStateInner<T>>, // FUTURE(no_std): replace Rc with arena-managed state handles.
+    inner: &'static Rc<MutableStateInner<T>>, // FUTURE(no_std): replace Rc with arena-managed state handles.
 }
 
+/// Read-write state handle. The backing allocation is leaked so the handle can
+/// be `Copy`, mirroring the "never tear down" lifecycle of the current demos
+/// and enabling clone-free capture in callbacks.
 pub struct MutableState<T: Clone + 'static> {
-    inner: Rc<MutableStateInner<T>>, // FUTURE(no_std): replace Rc with arena-managed state handles.
+    inner: &'static Rc<MutableStateInner<T>>, // FUTURE(no_std): replace Rc with arena-managed state handles.
 }
 
 impl<T: Clone + 'static> PartialEq for State<T> {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(self.inner, other.inner)
     }
 }
 
@@ -2189,15 +2194,15 @@ impl<T: Clone + 'static> Eq for State<T> {}
 
 impl<T: Clone + 'static> Clone for State<T> {
     fn clone(&self) -> Self {
-        Self {
-            inner: Rc::clone(&self.inner),
-        }
+        Self { inner: self.inner }
     }
 }
 
+impl<T: Clone + 'static> Copy for State<T> {}
+
 impl<T: Clone + 'static> PartialEq for MutableState<T> {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(self.inner, other.inner)
     }
 }
 
@@ -2205,23 +2210,22 @@ impl<T: Clone + 'static> Eq for MutableState<T> {}
 
 impl<T: Clone + 'static> Clone for MutableState<T> {
     fn clone(&self) -> Self {
-        Self {
-            inner: Rc::clone(&self.inner),
-        }
+        Self { inner: self.inner }
     }
 }
 
+impl<T: Clone + 'static> Copy for MutableState<T> {}
+
 impl<T: Clone + 'static> MutableState<T> {
     pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
-        let inner = Rc::new(MutableStateInner::new(value, runtime));
-        MutableStateInner::install_snapshot_observer(&inner);
-        Self { inner }
+        let inner_rc = Rc::new(MutableStateInner::new(value, runtime));
+        MutableStateInner::install_snapshot_observer(&inner_rc);
+        let leaked: &'static Rc<MutableStateInner<T>> = Box::leak(Box::new(inner_rc));
+        Self { inner: leaked }
     }
 
     pub fn as_state(&self) -> State<T> {
-        State {
-            inner: Rc::clone(&self.inner),
-        }
+        State { inner: self.inner }
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
