@@ -40,7 +40,9 @@ use std::sync::Arc;
 use winit::dpi::LogicalSize;
 #[cfg(target_os = "android")]
 use winit::event::TouchPhase;
-use winit::event::{ElementState, Event, MouseButton, WindowEvent};
+#[cfg(feature = "desktop")]
+use winit::event::{ElementState, MouseButton};
+use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoopBuilder};
 #[cfg(all(feature = "android", target_os = "android"))]
 pub use winit::platform::android::activity::AndroidApp;

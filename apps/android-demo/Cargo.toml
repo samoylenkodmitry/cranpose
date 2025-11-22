@@ -23,3 +23,4 @@ desktop-app = { path = "../desktop-demo" }
 apk_label = "Compose RS Demo"
 target_sdk_version = 34
 min_sdk_version = 24
+manifest = "AndroidManifest.xml"

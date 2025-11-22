@@ -9,6 +9,7 @@ use log::LevelFilter;
 
 #[cfg(target_os = "android")]
 #[no_mangle]
+#[allow(improper_ctypes_definitions)]
 pub extern "C" fn android_main(app: AndroidApp) {
     android_logger::init_once(
         Config::default()
