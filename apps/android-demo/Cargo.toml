@@ -21,6 +21,5 @@ desktop-app = { path = "../desktop-demo" }
 
 [package.metadata.android]
 apk_label = "Compose RS Demo"
-package = "com.rscompose.demo"
 target_sdk_version = 34
 min_sdk_version = 24
