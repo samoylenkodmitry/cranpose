@@ -20,9 +20,12 @@ pub(crate) fn web_fetch_example() {
 
     {
         let status_state = fetch_status;
-        let request_state = request_counter;
-        let request_key = request_state.get();
+        let request_key = request_counter.get();
         LaunchedEffect!(request_key, move |scope| {
+            if request_key == 0 {
+                return;
+            }
+
             let status = status_state;
             status.set(FetchStatus::Loading);
 
