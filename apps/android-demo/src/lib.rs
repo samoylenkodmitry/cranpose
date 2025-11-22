@@ -12,7 +12,7 @@ use log::LevelFilter;
 pub extern "C" fn android_main(app: AndroidApp) {
     android_logger::init_once(
         Config::default()
-            .with_min_level(LevelFilter::Info)
+            .with_max_level(LevelFilter::Info)
             .with_tag("rs-compose"),
     );
 

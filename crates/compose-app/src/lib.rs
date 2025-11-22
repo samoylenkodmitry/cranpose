@@ -21,7 +21,10 @@ compile_error!("Android builds currently require the `renderer-wgpu` feature.");
 use compose_app_shell::{default_root_key, AppShell};
 #[cfg(all(feature = "android", target_os = "android"))]
 use compose_platform_android_winit::AndroidWinitPlatform;
-#[cfg(feature = "desktop")]
+#[cfg(all(
+    feature = "desktop",
+    not(all(feature = "android", target_os = "android"))
+))]
 use compose_platform_desktop_winit::DesktopWinitPlatform;
 
 #[cfg(feature = "renderer-pixels")]
@@ -556,7 +559,11 @@ fn run_pixels_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) 
     std::process::exit(0);
 }
 
-#[cfg(all(feature = "renderer-wgpu", feature = "desktop"))]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    feature = "desktop",
+    not(target_os = "android")
+))]
 fn run_wgpu_app(options: &ComposeAppOptions, content: impl FnMut() + 'static) -> ! {
     let event_loop = EventLoopBuilder::new()
         .build()
