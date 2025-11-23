@@ -325,9 +325,17 @@ fn android_main(app: android_activity::AndroidApp) {
                     _ => {}
                 },
                 PollEvent::Timeout => {
-                    // Request continuous rendering to ensure screen updates
-                    // TODO: Optimize this to only render when content changes
-                    needs_redraw = true;
+                    // Request periodic rendering at ~10 FPS to keep UI responsive
+                    // while avoiding excessive redraws that cause glitches
+                    static mut FRAME_COUNTER: u32 = 0;
+                    unsafe {
+                        FRAME_COUNTER += 1;
+                        // Render every 10th frame (with 1ms poll = ~100ms between renders = ~10 FPS)
+                        if FRAME_COUNTER >= 10 {
+                            FRAME_COUNTER = 0;
+                            needs_redraw = true;
+                        }
+                    }
                 }
                 _ => {}
             }

@@ -643,8 +643,8 @@ impl GpuRenderer {
         let mut font_system = self.font_system.lock().unwrap();
 
         // Collect keys for current frame text using HashSet for O(1) lookups
-        // Using 56.0 base font size (4x default) for better visibility on high-DPI Android screens
-        const BASE_FONT_SIZE: f32 = 56.0;
+        // Using 28.0 base font size (2x default 14.0) for better visibility on high-DPI Android screens
+        const BASE_FONT_SIZE: f32 = 28.0;
         let current_text_keys: HashSet<TextCacheKey> = sorted_texts
             .iter()
             .filter(|t| !t.text.is_empty() && t.rect.width > 0.0 && t.rect.height > 0.0)
