@@ -673,7 +673,10 @@ impl GpuRenderer {
             let mut text_cache = self.text_cache.lock().unwrap();
             if let Some(cached) = text_cache.get_mut(&key) {
                 // Already in cache - use ensure() to only reshape if needed
-                cached.ensure(&mut font_system, &text_draw.text, font_size, Attrs::new(), width as f32, height as f32);
+                log::info!("Text '{}' found in cache, calling ensure()",
+                    text_draw.text.chars().take(10).collect::<String>());
+                let reshaped = cached.ensure(&mut font_system, &text_draw.text, font_size, Attrs::new(), width as f32, height as f32);
+                log::info!("  ensure() returned: reshaped={}", reshaped);
             } else {
                 // Not in cache, create new buffer
                 log::info!("Creating NEW text buffer '{}' at {}x{}, font_size={}",
@@ -725,6 +728,11 @@ impl GpuRenderer {
 
         for (idx, (text_draw, key)) in text_data.iter().enumerate() {
             let cached = text_cache.get(key).expect("Text should be in cache");
+
+            // Log buffer state
+            let (buf_w, buf_h) = cached.buffer.size();
+            let buf_runs = cached.buffer.layout_runs().count();
+
             let color = GlyphonColor::rgba(
                 (text_draw.color.r() * 255.0) as u8,
                 (text_draw.color.g() * 255.0) as u8,
@@ -745,13 +753,14 @@ impl GpuRenderer {
                     .unwrap_or(height as i32),
             };
 
-            log::info!("  Text {}: '{}' pos=({:.1}, {:.1}) scale={:.2} color=({}, {}, {}, {}) bounds=({}, {}, {}, {})",
+            log::info!("  Text {}: '{}' pos=({:.1}, {:.1}) scale={:.2} color=({}, {}, {}, {}) bounds=({}, {}, {}, {}) buffer={}x{} runs={}",
                 idx,
                 text_draw.text.chars().take(10).collect::<String>(),
                 text_draw.rect.x, text_draw.rect.y,
                 text_draw.scale,
                 color.r(), color.g(), color.b(), color.a(),
-                bounds.left, bounds.top, bounds.right, bounds.bottom);
+                bounds.left, bounds.top, bounds.right, bounds.bottom,
+                buf_w, buf_h, buf_runs);
 
             text_areas.push(TextArea {
                 buffer: &cached.buffer,
@@ -766,6 +775,7 @@ impl GpuRenderer {
         // Prepare all text at once
         if !text_areas.is_empty() {
             log::info!("=== Calling text_renderer.prepare() for {} text areas ===", text_areas.len());
+            log::info!("  Atlas state BEFORE prepare - (glyphon doesn't expose metrics)");
 
             let prepare_result = self.text_renderer
                 .prepare(
@@ -779,7 +789,10 @@ impl GpuRenderer {
                 );
 
             match prepare_result {
-                Ok(_) => log::info!("  Text prepare SUCCESS"),
+                Ok(_) => {
+                    log::info!("  Text prepare SUCCESS");
+                    log::info!("  Atlas state AFTER prepare - glyphs uploaded to GPU");
+                }
                 Err(ref e) => {
                     log::error!("  Text prepare FAILED: {:?}", e);
                     return Err(format!("Text prepare error: {:?}", e));
@@ -788,7 +801,11 @@ impl GpuRenderer {
         }
 
         // Trim the atlas after preparing
+        // NOTE: trim() removes unused glyphs to save memory
+        // This might be causing issues if glyphs are incorrectly marked as unused
+        log::info!("=== Calling text_atlas.trim() ===");
         self.text_atlas.trim();
+        log::info!("  Atlas trimmed (unused glyphs removed)");
 
         drop(font_system);
 
