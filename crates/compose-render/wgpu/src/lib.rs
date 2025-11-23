@@ -81,14 +81,10 @@ impl SharedTextBuffer {
         height: f32,
     ) -> bool {
         // Always update buffer size to match rendering viewport
+        // and force reshape to ensure glyphs are laid out correctly
         self.buffer.set_size(font_system, width, height);
 
-        // Check if text or font_size changed (requires reshaping)
-        if self.text == text && self.font_size == font_size {
-            return false; // No reshaping needed, just size update!
-        }
-
-        // Something changed, need to reshape
+        // Force reshape even if text/font_size unchanged to handle size changes
         let metrics = Metrics::new(font_size, font_size * 1.4);
         self.buffer.set_metrics(font_system, metrics);
         self.buffer
