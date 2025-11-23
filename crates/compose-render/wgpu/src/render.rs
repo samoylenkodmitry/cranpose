@@ -785,6 +785,10 @@ impl GpuRenderer {
         if !text_areas.is_empty() {
             log::info!("=== Calling text_renderer.prepare() for {} text areas ===", text_areas.len());
 
+            // Create fresh SwashCache each frame to avoid stale rasterization data
+            // This fixes flickering and ensures clean glyph rendering on Android
+            let mut fresh_swash_cache = SwashCache::new();
+
             let prepare_result = self.text_renderer
                 .prepare(
                     &self.device,
@@ -793,7 +797,7 @@ impl GpuRenderer {
                     &mut self.text_atlas,
                     Resolution { width, height },
                     text_areas.iter().cloned(),
-                    &mut self.swash_cache,
+                    &mut fresh_swash_cache,
                 );
 
             match prepare_result {
