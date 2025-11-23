@@ -167,14 +167,17 @@ impl WgpuRenderer {
     pub fn new() -> Self {
         let mut font_system = FontSystem::new();
 
-        // On Android, load system fonts from /system/fonts
+        // On Android, DO NOT load system fonts
+        // Modern Android uses Variable Fonts for Roboto which can cause
+        // rasterization corruption or font ID conflicts with glyphon.
+        // Use only our bundled static Roboto fonts for consistent rendering.
         #[cfg(target_os = "android")]
         {
-            log::info!("Loading Android system fonts from /system/fonts");
-            font_system.db_mut().load_fonts_dir("/system/fonts");
+            log::info!("Skipping Android system fonts - using bundled static Roboto only");
+            // font_system.db_mut().load_fonts_dir("/system/fonts");  // DISABLED
         }
 
-        // Load embedded Roboto fonts as additional fonts
+        // Load embedded Roboto fonts (static versions, not Variable Fonts)
         let font_light = include_bytes!("../../../../assets/Roboto-Light.ttf");
         let font_regular = include_bytes!("../../../../assets/Roboto-Regular.ttf");
 
