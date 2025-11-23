@@ -146,7 +146,7 @@ fn grid_example() {
 #[cfg(target_os = "android")]
 #[no_mangle]
 fn android_main(app: android_activity::AndroidApp) {
-    use android_activity::{MainEvent, PollEvent};
+    use android_activity::{InputStatus, MainEvent, PollEvent};
     use compose_app_shell::{default_root_key, AppShell};
     use compose_render_wgpu::WgpuRenderer;
     use std::sync::Arc;
@@ -324,20 +324,17 @@ fn android_main(app: android_activity::AndroidApp) {
                     }
                     _ => {}
                 },
-                PollEvent::Timeout => {
-                    // Request periodic rendering at ~10 FPS to keep UI responsive
-                    // while avoiding excessive redraws that cause glitches
-                    static mut FRAME_COUNTER: u32 = 0;
-                    unsafe {
-                        FRAME_COUNTER += 1;
-                        // Render every 10th frame (with 1ms poll = ~100ms between renders = ~10 FPS)
-                        if FRAME_COUNTER >= 10 {
-                            FRAME_COUNTER = 0;
-                            needs_redraw = true;
-                        }
-                    }
+                // CRITICAL: Handle input events to prevent ANR
+                // Android requires us to consume input events or they queue up and timeout
+                _ => {
+                    // Process and consume all pending input events
+                    app.input_events(|event| {
+                        // For now, just consume the event to prevent ANR
+                        // TODO: Actually handle touch events and trigger redraws
+                        needs_redraw = true;
+                        InputStatus::Handled
+                    });
                 }
-                _ => {}
             }
         });
 
