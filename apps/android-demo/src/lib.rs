@@ -194,6 +194,11 @@ fn android_main(app: android_activity::AndroidApp) {
     let mut window_size = (0u32, 0u32);
     let mut needs_redraw = false;
 
+    // ANDROID FIX: Force redraws for first frames to stabilize atlas
+    // The text atlas needs multiple render cycles to work properly on emulator
+    let mut frame_count = 0u32;
+    const WARMUP_FRAMES: u32 = 10;
+
     // Main event loop - process events quickly, render outside callback
     loop {
         // Poll events with very short timeout to avoid blocking input
@@ -360,8 +365,20 @@ fn android_main(app: android_activity::AndroidApp) {
             }
         });
 
+        // ANDROID FIX: Force redraws during warmup period to stabilize atlas
+        let in_warmup = frame_count < WARMUP_FRAMES;
+        if in_warmup {
+            needs_redraw = true;
+            if frame_count == 0 {
+                log::info!("Starting {} warmup frames to stabilize atlas", WARMUP_FRAMES);
+            }
+        } else if frame_count == WARMUP_FRAMES {
+            log::info!("Warmup complete - atlas should be stable now");
+        }
+
         // Do actual rendering outside the event callback to avoid blocking input
         if needs_redraw && surface_state.is_some() {
+            frame_count += 1;
             if let Some((surface, _, _, _, app_shell)) = &mut surface_state {
                 // Always update and render to ensure continuous display
                 app_shell.update();
