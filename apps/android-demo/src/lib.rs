@@ -369,16 +369,19 @@ fn android_main(app: android_activity::AndroidApp) {
         let in_warmup = frame_count < WARMUP_FRAMES;
         if in_warmup {
             needs_redraw = true;
-            if frame_count == 0 {
-                log::info!("Starting {} warmup frames to stabilize atlas", WARMUP_FRAMES);
-            }
-        } else if frame_count == WARMUP_FRAMES {
-            log::info!("Warmup complete - atlas should be stable now");
         }
 
         // Do actual rendering outside the event callback to avoid blocking input
         if needs_redraw && surface_state.is_some() {
+            let prev_frame = frame_count;
             frame_count += 1;
+
+            // Log warmup progress only on actual frame transitions
+            if prev_frame == 0 && surface_state.is_some() {
+                log::info!("Starting {} warmup frames to stabilize atlas", WARMUP_FRAMES);
+            } else if prev_frame == WARMUP_FRAMES - 1 {
+                log::info!("Warmup complete - atlas should be stable now");
+            }
             if let Some((surface, _, _, _, app_shell)) = &mut surface_state {
                 // Always update and render to ensure continuous display
                 app_shell.update();
