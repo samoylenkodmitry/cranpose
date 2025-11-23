@@ -159,6 +159,8 @@ pub struct WgpuRenderer {
     font_system: Arc<Mutex<FontSystem>>,
     /// Shared text buffer cache used by both measurement and rendering
     text_cache: SharedTextCache,
+    /// Root scale factor for text rendering (use for density scaling)
+    root_scale: f32,
 }
 
 impl WgpuRenderer {
@@ -207,6 +209,7 @@ impl WgpuRenderer {
             gpu_renderer: None,
             font_system,
             text_cache,
+            root_scale: 1.0,
         }
     }
 
@@ -224,6 +227,11 @@ impl WgpuRenderer {
             self.font_system.clone(),
             self.text_cache.clone(),
         ));
+    }
+
+    /// Set root scale factor for text rendering (e.g., density scaling on Android)
+    pub fn set_root_scale(&mut self, scale: f32) {
+        self.root_scale = scale;
     }
 
     /// Render the scene to a texture view.
@@ -277,7 +285,7 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.clear();
-        pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
+        pipeline::render_layout_tree_with_scale(layout_tree.root(), &mut self.scene, self.root_scale);
         Ok(())
     }
 }
@@ -305,7 +313,8 @@ impl WgpuTextMeasurer {
 
 impl TextMeasurer for WgpuTextMeasurer {
     fn measure(&self, text: &str) -> compose_ui::TextMetrics {
-        let font_size = 14.0; // Default font size
+        // Must match BASE_FONT_SIZE in render.rs to prevent text overflow
+        let font_size = 24.0;
         let size_key = (text.to_string(), (font_size * 100.0) as i32);
 
         // Check size cache first (fastest path)

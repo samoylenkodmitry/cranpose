@@ -6,14 +6,9 @@ use compose_ui::{
 };
 use std::sync::OnceLock;
 
-// Global density scale for Android DP->pixel conversion
-static DENSITY_SCALE: OnceLock<f32> = OnceLock::new();
-
 fn dp(value: f32) -> f32 {
-    let scale = DENSITY_SCALE.get().copied().unwrap_or(1.0);
-    let result = value * scale;
-    log::info!("DP_SCALE: dp({:.1}) x {:.2} = {:.1}", value, scale, result);
-    result
+    // Pass through - all values are in DP, GPU handles scaling
+    value
 }
 
 #[composable]
@@ -204,7 +199,6 @@ fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
 fn android_main(app: android_activity::AndroidApp) {
     use android_activity::{input::MotionAction, InputStatus, MainEvent, PollEvent};
     use compose_app_shell::{default_root_key, AppShell};
-    use compose_platform_android::AndroidPlatform;
     use compose_render_wgpu::WgpuRenderer;
     use std::sync::Arc;
 
@@ -258,9 +252,6 @@ fn android_main(app: android_activity::AndroidApp) {
 
     // Track if we just did a recomposition in WindowResized to avoid duplicate update()
     let mut skip_next_update = false;
-
-    // Platform abstraction for coordinate conversion
-    let mut platform = AndroidPlatform::new();
 
     // Main event loop - process events quickly, render outside callback
     loop {
@@ -360,29 +351,30 @@ fn android_main(app: android_activity::AndroidApp) {
 
                             surface.configure(&device, &surface_config);
 
-                            // Get display density FIRST - before creating AppShell!
-                            // This must happen before composables run, or dp() will return 1.0
+                            // Get display density and initialize global scale
                             let density = get_display_density(&app);
-                            DENSITY_SCALE.get_or_init(|| density);
-                            platform.set_scale_factor(density as f64);
-                            log::info!("Density initialized: {:.2}x (BEFORE AppShell creation)", density);
+                            log::info!("Display density: {:.2}x", density);
 
                             // Create renderer
                             let mut renderer = WgpuRenderer::new();
                             renderer.init_gpu(device.clone(), queue.clone(), surface_format);
+                            // No text scaling - viewport scaling handles everything uniformly
+                            renderer.set_root_scale(1.0);
 
                             // Create app shell with our combined_app
-                            // Composables will now use correct density via dp()
                             let mut app_shell = AppShell::new(renderer, default_root_key(), || {
                                 combined_app();
                             });
 
                             app_shell.set_buffer_size(width, height);
 
-                            // Keep viewport in pixels - density scaling happens via dp() helper
-                            app_shell.set_viewport(width as f32, height as f32);
-                            log::info!("Initial setup complete: {}x{} pixels at {:.2}x density",
-                                width, height, density);
+                            // Scale viewport to DP coordinates (GPU scales to physical pixels)
+                            // this actually doesn't change anything
+                            let vp_width = width as f32 / density;
+                            let vp_height = height as f32 / density;
+                            //app_shell.set_viewport(vp_width, vp_height);
+                            //log::info!("Viewport: {:.0}x{:.0} DP ({} physical @ {:.1}x)",
+                            //    vp_width, vp_height, width, density);
 
                             surface_state = Some((surface, device, queue, surface_config, app_shell));
 
@@ -399,9 +391,7 @@ fn android_main(app: android_activity::AndroidApp) {
                             let height = native_window.height() as u32;
                             window_size = (width, height);
 
-                            // Get density from Android DisplayMetrics via JNI
                             let density = get_display_density(&app);
-                            platform.set_scale_factor(density as f64);
                             log::info!("Window resized to {}x{} at {:.2}x density", width, height, density);
 
                             if let Some((surface, device, _, surface_config, app_shell)) =
@@ -413,8 +403,8 @@ fn android_main(app: android_activity::AndroidApp) {
                                     surface.configure(device, surface_config);
                                     app_shell.set_buffer_size(width, height);
 
-                                    // Keep viewport in pixels - density scaling should happen in UI layer
-                                    app_shell.set_viewport(width as f32, height as f32);
+                                    // Scale viewport to DP coordinates
+                                    app_shell.set_viewport(width as f32 / density, height as f32 / density);
 
                                     // CRITICAL: Force immediate recomposition after viewport change
                                     // Without this, layout calculated at 1x1 viewport persists until user interaction
