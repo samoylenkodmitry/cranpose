@@ -233,6 +233,7 @@ impl ShapeBatchBuffers {
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
+    surface_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     shape_bind_group_layout: wgpu::BindGroupLayout,
     font_system: Arc<Mutex<FontSystem>>,
@@ -379,6 +380,7 @@ impl GpuRenderer {
         Self {
             device,
             queue,
+            surface_format,
             pipeline,
             shape_bind_group_layout,
             font_system,
@@ -797,6 +799,16 @@ impl GpuRenderer {
         if !text_areas.is_empty() {
             log::info!("=== Calling text_renderer.prepare() for {} text areas ===", text_areas.len());
 
+            // ANDROID EMULATOR FIX ATTEMPT: Try recreating atlas fresh each frame
+            // This eliminates any potential atlas state corruption issues
+            #[cfg(target_os = "android")]
+            {
+                log::info!("  ANDROID: Recreating text atlas fresh this frame");
+                self.text_atlas = TextAtlas::new(&self.device, &self.queue, self.surface_format);
+                log::info!("  Fresh atlas created: {}x{}, kind={:?}",
+                    self.text_atlas.width(), self.text_atlas.height(), self.text_atlas.kind());
+            }
+
             // Log atlas state BEFORE prepare
             log::info!("  Atlas BEFORE prepare: {}x{}, kind={:?}",
                 self.text_atlas.width(), self.text_atlas.height(), self.text_atlas.kind());
@@ -857,6 +869,12 @@ impl GpuRenderer {
             log::info!("=== Calling text_renderer.render() ===");
             log::info!("  Viewport: {}x{}", width, height);
             log::info!("  Atlas for render: {}x{}", self.text_atlas.width(), self.text_atlas.height());
+
+            // EMULATOR FIX ATTEMPT: Explicitly set viewport and scissor rect
+            // Sometimes emulators have incorrect default viewport/scissor settings
+            text_pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+            text_pass.set_scissor_rect(0, 0, width, height);
+            log::info!("  Explicitly set viewport and scissor rect");
 
             let render_result = self.text_renderer
                 .render(&self.text_atlas, &mut text_pass);
