@@ -750,7 +750,7 @@ impl GpuRenderer {
                 text_draw.text.chars().take(10).collect::<String>(),
                 text_draw.rect.x, text_draw.rect.y,
                 text_draw.scale,
-                color.r, color.g, color.b, color.a,
+                color.r(), color.g(), color.b(), color.a(),
                 bounds.left, bounds.top, bounds.right, bounds.bottom);
 
             text_areas.push(TextArea {
