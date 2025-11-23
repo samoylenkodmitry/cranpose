@@ -406,6 +406,11 @@ fn android_main(app: android_activity::AndroidApp) {
 
                                     // Keep viewport in pixels - density scaling should happen in UI layer
                                     app_shell.set_viewport(width as f32, height as f32);
+
+                                    // CRITICAL: Force immediate recomposition after viewport change
+                                    // Without this, layout calculated at 1x1 viewport persists until user interaction
+                                    app_shell.update();
+                                    log::info!("Forced recomposition after viewport change");
                                 }
                             }
                         }
