@@ -143,6 +143,11 @@ pub fn run(
                         log::info!("Window initialized, setting up rendering");
 
                         if let Some(native_window) = app.native_window() {
+                            // Get actual window dimensions
+                            let width = native_window.width() as u32;
+                            let height = native_window.height() as u32;
+                            window_size = (width, height);
+
                             use raw_window_handle::{
                                 AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle,
                                 RawWindowHandle,
@@ -206,10 +211,6 @@ pub fn run(
                                 .unwrap_or(surface_caps.formats[0]);
 
                             // Configure surface
-                            let (width, height) = window_size;
-                            let width = width.max(1);
-                            let height = height.max(1);
-
                             let surface_config = wgpu::SurfaceConfiguration {
                                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                                 format: surface_format,
@@ -231,7 +232,7 @@ pub fn run(
                             // Create renderer with Android configuration
                             let mut renderer = WgpuRenderer::with_config(renderer_config.clone());
                             renderer.init_gpu(device.clone(), queue.clone(), surface_format);
-                            renderer.set_root_scale(1.0); // Viewport scaling handles density
+                            renderer.set_root_scale(1.0);
 
                             // Create app shell with content (take from Option)
                             let mut app_shell = AppShell::new(
@@ -241,6 +242,15 @@ pub fn run(
                             );
 
                             app_shell.set_buffer_size(width, height);
+
+                            // Set viewport to physical pixels (matches desktop behavior)
+                            app_shell.set_viewport(width as f32, height as f32);
+                            log::info!(
+                                "Set viewport to {}x{} physical pixels at {:.2}x density",
+                                width,
+                                height,
+                                density
+                            );
 
                             surface_state = Some((surface, device, queue, surface_config, app_shell));
 
@@ -275,11 +285,8 @@ pub fn run(
                                     surface.configure(device, surface_config);
                                     app_shell.set_buffer_size(width, height);
 
-                                    // Scale viewport to DP coordinates using platform's density
-                                    app_shell.set_viewport(
-                                        width as f32 / android_platform.scale_factor(),
-                                        height as f32 / android_platform.scale_factor(),
-                                    );
+                                    // Set viewport to physical pixels (matches desktop behavior)
+                                    app_shell.set_viewport(width as f32, height as f32);
 
                                     // Force immediate recomposition after viewport change
                                     app_shell.update();
@@ -303,23 +310,19 @@ pub fn run(
                                     android_activity::input::InputEvent::MotionEvent(
                                         motion_event,
                                     ) => {
-                                        // Get pointer position and convert to logical coordinates
+                                        // Get pointer position in physical pixels (matches viewport coordinates)
                                         let pointer = motion_event.pointer_at_index(0);
-                                        let physical_x = pointer.x() as f64;
-                                        let physical_y = pointer.y() as f64;
+                                        let x = pointer.x();
+                                        let y = pointer.y();
 
-                                        // Use platform to convert physical to logical coordinates
-                                        let pos = android_platform
-                                            .pointer_position(physical_x, physical_y);
-
-                                        log::info!("MotionEvent: action={:?} pos=({:.1}, {:.1})", motion_event.action(), pos.x, pos.y);
+                                        log::info!("MotionEvent: action={:?} pos=({:.1}, {:.1})", motion_event.action(), x, y);
 
                                         match motion_event.action() {
                                             MotionAction::Down | MotionAction::PointerDown => {
                                                 if let Some((_, _, _, _, app_shell)) =
                                                     &mut surface_state
                                                 {
-                                                    app_shell.set_cursor(pos.x, pos.y);
+                                                    app_shell.set_cursor(x, y);
                                                     app_shell.pointer_pressed();
                                                     needs_redraw = true;
                                                 }
@@ -328,7 +331,7 @@ pub fn run(
                                                 if let Some((_, _, _, _, app_shell)) =
                                                     &mut surface_state
                                                 {
-                                                    app_shell.set_cursor(pos.x, pos.y);
+                                                    app_shell.set_cursor(x, y);
                                                     app_shell.pointer_released();
                                                     needs_redraw = true;
                                                 }
@@ -337,7 +340,7 @@ pub fn run(
                                                 if let Some((_, _, _, _, app_shell)) =
                                                     &mut surface_state
                                                 {
-                                                    app_shell.set_cursor(pos.x, pos.y);
+                                                    app_shell.set_cursor(x, y);
                                                     if app_shell.should_render() {
                                                         needs_redraw = true;
                                                     }
