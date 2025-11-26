@@ -227,7 +227,7 @@ impl WgpuRenderer {
     ) -> Result<(), WgpuRendererError> {
         if let Some(gpu_renderer) = &mut self.gpu_renderer {
             gpu_renderer
-                .render(view, &self.scene.shapes, &self.scene.texts, width, height)
+                .render(view, &self.scene.shapes, &self.scene.texts, width, height, self.root_scale)
                 .map_err(WgpuRendererError::Wgpu)
         } else {
             Err(WgpuRendererError::Wgpu(
@@ -269,7 +269,8 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.scene.clear();
-        pipeline::render_layout_tree_with_scale(layout_tree.root(), &mut self.scene, self.root_scale);
+        // Build scene in logical dp - scaling happens in GPU vertex upload
+        pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
         Ok(())
     }
 }

@@ -21,13 +21,20 @@ type SurfaceState = (
     AppShell<WgpuRenderer>,
 );
 
-/// Get display density placeholder.
-/// TODO: Wire proper density from Java/Kotlin side via extern "C" function.
+/// Get display density for Android devices.
+/// TODO: Implement proper JNI call to get DisplayMetrics.density from Android.
+/// For now, we use a reasonable default density of 2.0 (HDPI/xhdpi screens).
+///
+/// Common Android densities:
+/// - mdpi: 1.0 (160 dpi)
+/// - hdpi: 1.5 (240 dpi)
+/// - xhdpi: 2.0 (320 dpi) - most common modern phones
+/// - xxhdpi: 3.0 (480 dpi)
+/// - xxxhdpi: 4.0 (640 dpi)
 fn get_display_density() -> f32 {
-    // For now treat everything as 1.0 scale on Android.
-    // When we wire a proper Java → Rust bridge for DisplayMetrics,
-    // we can replace this.
-    1.0
+    // Default to xhdpi (2.0) which is common for modern Android devices
+    // This provides reasonable UI scaling on most phones
+    2.0
 }
 
 /// Runs an Android Compose application with wgpu rendering.
