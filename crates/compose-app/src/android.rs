@@ -21,9 +21,7 @@ type SurfaceState = (
     AppShell<WgpuRenderer>,
 );
 
-/// Get display density for Android devices.
-/// TODO: Implement proper JNI call to get DisplayMetrics.density from Android.
-/// For now, we use a reasonable default density of 2.0 (HDPI/xhdpi screens).
+/// Get display density from Android DisplayMetrics.
 ///
 /// Common Android densities:
 /// - mdpi: 1.0 (160 dpi)
@@ -32,9 +30,61 @@ type SurfaceState = (
 /// - xxhdpi: 3.0 (480 dpi)
 /// - xxxhdpi: 4.0 (640 dpi)
 fn get_display_density() -> f32 {
-    // Default to xhdpi (2.0) which is common for modern Android devices
-    // This provides reasonable UI scaling on most phones
-    2.0
+    use jni::objects::JObject;
+    use jni::JNIEnv;
+    use ndk_context::android_context;
+
+    let ctx = android_context();
+    let vm_ptr = ctx.vm();
+    let context_ptr = ctx.context();
+
+    if vm_ptr.is_null() || context_ptr.is_null() {
+        log::warn!("android_context returned null vm/context; using density 2.0");
+        return 2.0;
+    }
+
+    unsafe {
+        let vm = jni::JavaVM::from_raw(vm_ptr as *mut _)
+            .expect("JavaVM::from_raw failed");
+        let mut env = vm.attach_current_thread().expect("attach_current_thread failed");
+        let env: JNIEnv<'_> = &mut env;
+
+        let context = JObject::from_raw(context_ptr as *mut _);
+
+        let resources = env
+            .call_method(
+                &context,
+                "getResources",
+                "()Landroid/content/res/Resources;",
+                &[],
+            )
+            .expect("getResources failed")
+            .l()
+            .expect("getResources returned null");
+
+        let metrics = env
+            .call_method(
+                &resources,
+                "getDisplayMetrics",
+                "()Landroid/util/DisplayMetrics;",
+                &[],
+            )
+            .expect("getDisplayMetrics failed")
+            .l()
+            .expect("getDisplayMetrics returned null");
+
+        let density_field = env
+            .get_field(&metrics, "density", "F")
+            .expect("getField(density) failed");
+
+        let density = density_field.f().expect("density not float");
+        if density <= 0.0 {
+            log::warn!("DisplayMetrics.density <= 0; using 2.0");
+            2.0
+        } else {
+            density
+        }
+    }
 }
 
 /// Runs an Android Compose application with wgpu rendering.
@@ -90,9 +140,6 @@ pub fn run(
 
     let mut window_size = (0u32, 0u32);
     let mut needs_redraw = false;
-
-    // Track if we just did a recomposition in WindowResized to avoid duplicate update()
-    let mut skip_next_update = false;
 
     // Main event loop
     loop {
@@ -268,10 +315,8 @@ pub fn run(
                                     // Update renderer scale
                                     app_shell.renderer().set_root_scale(density);
 
-                                    // Force immediate recomposition after viewport change
-                                    app_shell.update();
-                                    skip_next_update = true;
-                                    log::info!("Forced recomposition after viewport change");
+                                    // Trigger redraw with new viewport
+                                    needs_redraw = true;
                                 }
                             }
                         }
@@ -352,21 +397,15 @@ pub fn run(
         }
 
         // Render outside event callback
-        if needs_redraw && surface_state.is_some() {
-            if let Some((surface, _, _, _, app_shell)) = &mut surface_state {
-                // Skip update if we just did it in WindowResized
-                if skip_next_update {
-                    skip_next_update = false;
-                } else {
-                    app_shell.update();
-                }
+        if needs_redraw {
+            if let Some((surface, device, _, surface_config, app_shell)) = &mut surface_state {
+                app_shell.update();
 
                 match surface.get_current_texture() {
                     Ok(frame) => {
-                        let view =
-                            frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
+                        let view = frame
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
                         let (width, height) = app_shell.buffer_size();
 
                         if let Err(e) = app_shell.renderer().render(&view, width, height) {
@@ -375,11 +414,15 @@ pub fn run(
 
                         frame.present();
                     }
-                    Err(wgpu::SurfaceError::Lost) => {
-                        log::warn!("Surface lost, will be reconfigured");
+                    Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+                        // Reconfigure surface using current size and config
+                        let (width, height) = app_shell.buffer_size();
+                        surface_config.width = width;
+                        surface_config.height = height;
+                        surface.configure(device, surface_config);
                     }
                     Err(wgpu::SurfaceError::OutOfMemory) => {
-                        log::error!("Out of memory!");
+                        log::error!("Out of memory; exiting");
                         break;
                     }
                     Err(e) => {
@@ -387,6 +430,7 @@ pub fn run(
                     }
                 }
             }
+
             needs_redraw = false;
         }
     }

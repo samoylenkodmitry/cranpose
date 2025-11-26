@@ -1,5 +1,3 @@
-#![allow(clippy::missing_const_for_thread_local)]
-
 use compose_animation::animateFloatAsState;
 use compose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
