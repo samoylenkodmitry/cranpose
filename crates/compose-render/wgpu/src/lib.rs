@@ -130,6 +130,31 @@ impl SharedTextBuffer {
 /// Shared cache for text buffers used by both measurement and rendering
 pub(crate) type SharedTextCache = Arc<Mutex<HashMap<TextCacheKey, SharedTextBuffer>>>;
 
+/// Trim text cache if it exceeds MAX_CACHE_ITEMS.
+/// Removes the oldest half of entries when limit is reached.
+fn trim_text_cache(cache: &mut HashMap<TextCacheKey, SharedTextBuffer>) {
+    if cache.len() > MAX_CACHE_ITEMS {
+        let target_size = MAX_CACHE_ITEMS / 2;
+        let to_remove = cache.len() - target_size;
+
+        // Remove oldest entries (arbitrary keys from the front)
+        let keys_to_remove: Vec<TextCacheKey> = cache
+            .keys()
+            .take(to_remove)
+            .cloned()
+            .collect();
+
+        for key in keys_to_remove {
+            cache.remove(&key);
+        }
+
+        log::debug!("Trimmed text cache from {} to {} entries", cache.len() + to_remove, cache.len());
+    }
+}
+
+/// Maximum number of cached text buffers before trimming occurs
+const MAX_CACHE_ITEMS: usize = 256;
+
 /// WGPU-based renderer for GPU-accelerated 2D rendering.
 ///
 /// This renderer supports:
@@ -148,9 +173,19 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
-    /// Create a new WGPU renderer without GPU resources.
+    /// Create a new WGPU renderer with the specified font data.
+    ///
+    /// This is the recommended constructor for applications.
     /// Call `init_gpu` before rendering.
-    pub fn new() -> Self {
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let font_light = include_bytes!("path/to/font-light.ttf");
+    /// let font_regular = include_bytes!("path/to/font-regular.ttf");
+    /// let renderer = WgpuRenderer::new_with_fonts(&[font_light, font_regular]);
+    /// ```
+    pub fn new_with_fonts(fonts: &[&[u8]]) -> Self {
         let mut font_system = FontSystem::new();
 
         // On Android, DO NOT load system fonts
@@ -159,19 +194,15 @@ impl WgpuRenderer {
         // Use only our bundled static Roboto fonts for consistent rendering.
         #[cfg(target_os = "android")]
         {
-            log::info!("Skipping Android system fonts - using bundled static Roboto only");
+            log::info!("Skipping Android system fonts - using application-provided fonts");
             // font_system.db_mut().load_fonts_dir("/system/fonts");  // DISABLED
         }
 
-        // Load embedded Roboto fonts (static versions, not Variable Fonts)
-        let font_light = include_bytes!("../../../../assets/Roboto-Light.ttf");
-        let font_regular = include_bytes!("../../../../assets/Roboto-Regular.ttf");
-
-        log::info!("Loading Roboto Light font, size: {} bytes", font_light.len());
-        font_system.db_mut().load_font_data(font_light.to_vec());
-
-        log::info!("Loading Roboto Regular font, size: {} bytes", font_regular.len());
-        font_system.db_mut().load_font_data(font_regular.to_vec());
+        // Load application-provided fonts
+        for (i, font_data) in fonts.iter().enumerate() {
+            log::info!("Loading font #{}, size: {} bytes", i, font_data.len());
+            font_system.db_mut().load_font_data(font_data.to_vec());
+        }
 
         let face_count = font_system.db().faces().count();
         log::info!("Total font faces loaded: {}", face_count);
@@ -183,6 +214,27 @@ impl WgpuRenderer {
         let font_system = Arc::new(Mutex::new(font_system));
 
         // Create shared text cache for both measurement and rendering
+        let text_cache = Arc::new(Mutex::new(HashMap::new()));
+
+        let text_measurer = WgpuTextMeasurer::new(font_system.clone(), text_cache.clone());
+        set_text_measurer(text_measurer.clone());
+
+        Self {
+            scene: Scene::new(),
+            gpu_renderer: None,
+            font_system,
+            text_cache,
+            root_scale: 1.0,
+        }
+    }
+
+    /// Create a new WGPU renderer without any fonts.
+    ///
+    /// **Warning:** This is for internal use only. Applications should use `new_with_fonts()`.
+    /// Text rendering will fail without fonts.
+    pub fn new() -> Self {
+        let font_system = FontSystem::new();
+        let font_system = Arc::new(Mutex::new(font_system));
         let text_cache = Arc::new(Mutex::new(HashMap::new()));
 
         let text_measurer = WgpuTextMeasurer::new(font_system.clone(), text_cache.clone());
@@ -319,21 +371,27 @@ impl TextMeasurer for WgpuTextMeasurer {
         let mut font_system = self.font_system.lock().unwrap();
         let mut text_cache = self.text_cache.lock().unwrap();
 
-        let buffer = text_cache.entry(cache_key).or_insert_with(|| {
-            let buffer = Buffer::new(&mut font_system, Metrics::new(BASE_FONT_SIZE, BASE_FONT_SIZE * 1.4));
-            SharedTextBuffer {
-                buffer,
-                text: String::new(),
-                font_size: 0.0,
-                cached_size: None,
-            }
-        });
+        // Get or create buffer and calculate size
+        let size = {
+            let buffer = text_cache.entry(cache_key).or_insert_with(|| {
+                let buffer = Buffer::new(&mut font_system, Metrics::new(BASE_FONT_SIZE, BASE_FONT_SIZE * 1.4));
+                SharedTextBuffer {
+                    buffer,
+                    text: String::new(),
+                    font_size: 0.0,
+                    cached_size: None,
+                }
+            });
 
-        // Ensure buffer has the correct text
-        buffer.ensure(&mut font_system, text, BASE_FONT_SIZE, Attrs::new());
+            // Ensure buffer has the correct text
+            buffer.ensure(&mut font_system, text, BASE_FONT_SIZE, Attrs::new());
 
-        // Calculate size if not cached
-        let size = buffer.size(BASE_FONT_SIZE);
+            // Calculate size if not cached
+            buffer.size(BASE_FONT_SIZE)
+        };
+
+        // Trim cache if needed (after we're done with buffer reference)
+        trim_text_cache(&mut text_cache);
 
         drop(font_system);
         drop(text_cache);

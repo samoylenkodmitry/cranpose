@@ -12,14 +12,14 @@ use std::sync::{
     Arc,
 };
 
-/// Surface state tuple containing all wgpu resources and the app shell.
-type SurfaceState = (
-    wgpu::Surface<'static>,
-    Arc<wgpu::Device>,
-    Arc<wgpu::Queue>,
-    wgpu::SurfaceConfiguration,
-    AppShell<WgpuRenderer>,
-);
+/// Surface state containing all wgpu resources and the app shell.
+struct SurfaceState {
+    surface: wgpu::Surface<'static>,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    config: wgpu::SurfaceConfiguration,
+    app_shell: AppShell<WgpuRenderer>,
+}
 
 /// Get display density from Android NDK Configuration.
 ///
@@ -41,6 +41,43 @@ fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
     density_dpi
         .map(|dpi| dpi as f32 / 160.0)
         .unwrap_or(2.0) // Fallback to xhdpi (2.0) if density unavailable
+}
+
+/// Renders a single frame. Returns true if out of memory (should exit).
+fn render_once(state: &mut SurfaceState) -> bool {
+    state.app_shell.update();
+
+    match state.surface.get_current_texture() {
+        Ok(frame) => {
+            let view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let (width, height) = state.app_shell.buffer_size();
+
+            if let Err(e) = state.app_shell.renderer().render(&view, width, height) {
+                log::error!("Render error: {:?}", e);
+            }
+
+            frame.present();
+            false
+        }
+        Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+            // Reconfigure surface using current size and config
+            let (width, height) = state.app_shell.buffer_size();
+            state.config.width = width;
+            state.config.height = height;
+            state.surface.configure(&state.device, &state.config);
+            false
+        }
+        Err(wgpu::SurfaceError::OutOfMemory) => {
+            log::error!("Out of memory; exiting");
+            true
+        }
+        Err(e) => {
+            log::debug!("Surface error: {:?}", e);
+            false
+        }
+    }
 }
 
 /// Runs an Android Compose application with wgpu rendering.
@@ -94,12 +131,25 @@ pub fn run(
     // Surface state (initialized when window is ready)
     let mut surface_state: Option<SurfaceState> = None;
 
-    let mut window_size = (0u32, 0u32);
-    let mut needs_redraw = false;
-
     // Main event loop
     loop {
-        app.poll_events(Some(std::time::Duration::from_millis(1)), |event| {
+        // Dynamic poll duration:
+        // - None when no window (event-driven sleep)
+        // - ZERO when animating (tight loop)
+        // - None when idle (event-driven)
+        let poll_duration = if surface_state.is_none() {
+            None // No window, sleep until next event
+        } else if let Some(state) = &surface_state {
+            if state.app_shell.has_active_animations() {
+                Some(std::time::Duration::ZERO) // Tight loop for animations
+            } else {
+                None // Idle, sleep until next event
+            }
+        } else {
+            None
+        };
+
+        app.poll_events(poll_duration, |event| {
             match event {
                 PollEvent::Main(main_event) => match main_event {
                     MainEvent::InitWindow { .. } => {
@@ -109,31 +159,10 @@ pub fn run(
                             // Get actual window dimensions
                             let width = native_window.width() as u32;
                             let height = native_window.height() as u32;
-                            window_size = (width, height);
 
-                            use raw_window_handle::{
-                                AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle,
-                                RawWindowHandle,
-                            };
-
-                            // Create surface from the Android window
+                            // Create surface from the Android window using platform helper
                             let surface = unsafe {
-                                let window_handle = AndroidNdkWindowHandle::new(
-                                    std::ptr::NonNull::new(native_window.ptr().as_ptr() as *mut _)
-                                        .expect("Null window pointer"),
-                                );
-                                let display_handle = AndroidDisplayHandle::new();
-
-                                let raw_window_handle = RawWindowHandle::AndroidNdk(window_handle);
-                                let raw_display_handle = RawDisplayHandle::Android(display_handle);
-
-                                let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-                                    raw_display_handle,
-                                    raw_window_handle,
-                                };
-
-                                instance
-                                    .create_surface_unsafe(target)
+                                compose_platform_android::create_wgpu_surface(&instance, &native_window)
                                     .expect("Failed to create surface")
                             };
 
@@ -192,8 +221,12 @@ pub fn run(
                             android_platform.set_scale_factor(density as f64);
                             log::info!("Display density: {:.2}x", density);
 
-                            // Create renderer
-                            let mut renderer = WgpuRenderer::new();
+                            // Load bundled fonts
+                            let font_light = include_bytes!("../../../assets/Roboto-Light.ttf");
+                            let font_regular = include_bytes!("../../../assets/Roboto-Regular.ttf");
+
+                            // Create renderer with fonts
+                            let mut renderer = WgpuRenderer::new_with_fonts(&[font_light, font_regular]);
                             renderer.init_gpu(device.clone(), queue.clone(), surface_format);
                             renderer.set_root_scale(density);
 
@@ -228,7 +261,13 @@ pub fn run(
                                 density
                             );
 
-                            surface_state = Some((surface, device, queue, surface_config, app_shell));
+                            surface_state = Some(SurfaceState {
+                                surface,
+                                device,
+                                queue,
+                                config: surface_config,
+                                app_shell,
+                            });
 
                             log::info!("Rendering initialized successfully");
                         }
@@ -241,7 +280,6 @@ pub fn run(
                         if let Some(native_window) = app.native_window() {
                             let width = native_window.width() as u32;
                             let height = native_window.height() as u32;
-                            window_size = (width, height);
 
                             let density = get_display_density(&app);
                             android_platform.set_scale_factor(density as f64);
@@ -252,33 +290,30 @@ pub fn run(
                                 density
                             );
 
-                            if let Some((surface, device, _, surface_config, app_shell)) =
-                                &mut surface_state
-                            {
+                            if let Some(state) = &mut surface_state {
                                 if width > 0 && height > 0 {
-                                    surface_config.width = width;
-                                    surface_config.height = height;
-                                    surface.configure(device, surface_config);
+                                    state.config.width = width;
+                                    state.config.height = height;
+                                    state.surface.configure(&state.device, &state.config);
 
                                     // Set buffer_size to physical pixels
-                                    app_shell.set_buffer_size(width, height);
+                                    state.app_shell.set_buffer_size(width, height);
 
-                                    // Set viewport to logical dp
+                                    // Set viewport to logical dp (marks dirty internally)
                                     let width_dp = width as f32 / density;
                                     let height_dp = height as f32 / density;
-                                    app_shell.set_viewport(width_dp, height_dp);
+                                    state.app_shell.set_viewport(width_dp, height_dp);
 
                                     // Update renderer scale
-                                    app_shell.renderer().set_root_scale(density);
-
-                                    // Trigger redraw with new viewport
-                                    needs_redraw = true;
+                                    state.app_shell.renderer().set_root_scale(density);
                                 }
                             }
                         }
                     }
                     MainEvent::RedrawNeeded { .. } => {
-                        needs_redraw = true;
+                        if let Some(state) = &mut surface_state {
+                            state.app_shell.mark_dirty();
+                        }
                     }
                     _ => {}
                 },
@@ -299,31 +334,20 @@ pub fn run(
 
                                         match motion_event.action() {
                                             MotionAction::Down | MotionAction::PointerDown => {
-                                                if let Some((_, _, _, _, app_shell)) =
-                                                    &mut surface_state
-                                                {
-                                                    app_shell.set_cursor(logical.x, logical.y);
-                                                    app_shell.pointer_pressed();
-                                                    needs_redraw = true;
+                                                if let Some(state) = &mut surface_state {
+                                                    state.app_shell.set_cursor(logical.x, logical.y);
+                                                    state.app_shell.pointer_pressed();
                                                 }
                                             }
                                             MotionAction::Up | MotionAction::PointerUp => {
-                                                if let Some((_, _, _, _, app_shell)) =
-                                                    &mut surface_state
-                                                {
-                                                    app_shell.set_cursor(logical.x, logical.y);
-                                                    app_shell.pointer_released();
-                                                    needs_redraw = true;
+                                                if let Some(state) = &mut surface_state {
+                                                    state.app_shell.set_cursor(logical.x, logical.y);
+                                                    state.app_shell.pointer_released();
                                                 }
                                             }
                                             MotionAction::Move => {
-                                                if let Some((_, _, _, _, app_shell)) =
-                                                    &mut surface_state
-                                                {
-                                                    app_shell.set_cursor(logical.x, logical.y);
-                                                    if app_shell.should_render() {
-                                                        needs_redraw = true;
-                                                    }
+                                                if let Some(state) = &mut surface_state {
+                                                    state.app_shell.set_cursor(logical.x, logical.y);
                                                 }
                                             }
                                             _ => {}
@@ -349,45 +373,18 @@ pub fn run(
 
         // Check if app side requested a frame (animations, state changes)
         if need_frame.swap(false, Ordering::Relaxed) {
-            needs_redraw = true;
+            if let Some(state) = &mut surface_state {
+                state.app_shell.mark_dirty();
+            }
         }
 
-        // Render outside event callback
-        if needs_redraw {
-            if let Some((surface, device, _, surface_config, app_shell)) = &mut surface_state {
-                app_shell.update();
-
-                match surface.get_current_texture() {
-                    Ok(frame) => {
-                        let view = frame
-                            .texture
-                            .create_view(&wgpu::TextureViewDescriptor::default());
-                        let (width, height) = app_shell.buffer_size();
-
-                        if let Err(e) = app_shell.renderer().render(&view, width, height) {
-                            log::error!("Render error: {:?}", e);
-                        }
-
-                        frame.present();
-                    }
-                    Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
-                        // Reconfigure surface using current size and config
-                        let (width, height) = app_shell.buffer_size();
-                        surface_config.width = width;
-                        surface_config.height = height;
-                        surface.configure(device, surface_config);
-                    }
-                    Err(wgpu::SurfaceError::OutOfMemory) => {
-                        log::error!("Out of memory; exiting");
-                        break;
-                    }
-                    Err(e) => {
-                        log::debug!("Surface error: {:?}", e);
-                    }
+        // Render outside event callback if needed
+        if let Some(state) = &mut surface_state {
+            if state.app_shell.needs_redraw() {
+                if render_once(state) {
+                    break; // Out of memory, exit
                 }
             }
-
-            needs_redraw = false;
         }
     }
 }

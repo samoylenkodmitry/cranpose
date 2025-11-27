@@ -441,7 +441,6 @@ dependencies = [
  "ndk-context",
  "pixels",
  "pollster",
- "raw-window-handle",
  "wgpu",
  "winit",
 ]
@@ -501,7 +500,10 @@ dependencies = [
 name = "compose-platform-android"
 version = "0.1.0"
 dependencies = [
+ "android-activity",
  "compose-ui-graphics",
+ "raw-window-handle",
+ "wgpu",
 ]
 
 [[package]]

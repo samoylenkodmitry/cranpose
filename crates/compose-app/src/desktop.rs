@@ -87,8 +87,12 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
 
     surface.configure(&device, &surface_config);
 
-    // Create renderer and set initial scale
-    let mut renderer = WgpuRenderer::new();
+    // Load bundled fonts
+    let font_light = include_bytes!("../../../assets/Roboto-Light.ttf");
+    let font_regular = include_bytes!("../../../assets/Roboto-Regular.ttf");
+
+    // Create renderer with fonts and set initial scale
+    let mut renderer = WgpuRenderer::new_with_fonts(&[font_light, font_regular]);
     renderer.init_gpu(Arc::new(device), Arc::new(queue), surface_format);
     let initial_scale = window.scale_factor();
     renderer.set_root_scale(initial_scale as f32);
@@ -153,18 +157,18 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                 WindowEvent::CursorMoved { position, .. } => {
                     let logical = platform.pointer_position(position);
                     app.set_cursor(logical.x, logical.y);
-                    if app.should_render() {
-                        app.update();
-                        window.request_redraw();
-                    }
                 }
                 WindowEvent::MouseInput {
                     state,
                     button: MouseButton::Left,
                     ..
                 } => match state {
-                    ElementState::Pressed => app.pointer_pressed(),
-                    ElementState::Released => app.pointer_released(),
+                    ElementState::Pressed => {
+                        app.pointer_pressed();
+                    }
+                    ElementState::Released => {
+                        app.pointer_released();
+                    }
                 },
                 WindowEvent::KeyboardInput { event, .. } => {
                     use winit::keyboard::{KeyCode, PhysicalKey};
@@ -202,9 +206,14 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                 _ => {}
             },
             Event::AboutToWait | Event::UserEvent(()) => {
-                if app.should_render() {
+                if app.needs_redraw() {
                     window.request_redraw();
+                }
+                // Use Poll for animations, Wait for idle
+                if app.has_active_animations() {
                     elwt.set_control_flow(ControlFlow::Poll);
+                } else {
+                    elwt.set_control_flow(ControlFlow::Wait);
                 }
             }
             _ => {}
