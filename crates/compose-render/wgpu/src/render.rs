@@ -6,8 +6,8 @@ use crate::{SharedTextBuffer, SharedTextCache, TextCacheKey, BASE_FONT_SIZE_DP};
 use bytemuck::{Pod, Zeroable};
 use compose_ui_graphics::{Brush, Color};
 use glyphon::{
-    Attrs, Buffer, Color as GlyphonColor, FontSystem, Metrics, Resolution, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer,
+    Attrs, Buffer, Color as GlyphonColor, FontSystem, Metrics, PrepareError, RenderError,
+    Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
 };
 use std::sync::{Arc, Mutex};
 
@@ -748,19 +748,35 @@ impl GpuRenderer {
         // TODO: Re-evaluate atlas trimming once DPI scaling is stable.
 
         if !text_areas.is_empty() {
-            let prepare_result = self.text_renderer.prepare(
-                &self.device,
-                &self.queue,
-                &mut font_system,
-                &mut self.text_atlas,
-                Resolution { width, height },
-                text_areas.iter().cloned(),
-                &mut self.swash_cache,
-            );
+            let mut prepare_attempt = 0;
+            let mut prepared = false;
 
-            if let Err(ref e) = prepare_result {
-                log::error!("Text prepare error: {:?}", e);
-                return Err(format!("Text prepare error: {:?}", e));
+            while prepare_attempt < 2 && !prepared {
+                let prepare_result = self.text_renderer.prepare(
+                    &self.device,
+                    &self.queue,
+                    &mut font_system,
+                    &mut self.text_atlas,
+                    Resolution { width, height },
+                    text_areas.iter().cloned(),
+                    &mut self.swash_cache,
+                );
+
+                match prepare_result {
+                    Ok(_) => prepared = true,
+                    Err(PrepareError::AtlasFull) => {
+                        prepare_attempt += 1;
+                        log::warn!(
+                            "Text atlas full during prepare; trimming atlas and retrying (attempt {prepare_attempt})"
+                        );
+                        self.text_atlas.trim();
+                    }
+                }
+            }
+
+            if !prepared {
+                log::error!("Text prepare error: atlas full after trimming");
+                return Err("Text prepare error: atlas full after trimming".to_string());
             }
         }
 
@@ -773,7 +789,7 @@ impl GpuRenderer {
                     label: Some("Text Encoder"),
                 });
 
-        {
+        let mut render_result = {
             let mut text_pass = text_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Text Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -789,12 +805,81 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
 
-            let render_result = self.text_renderer.render(&self.text_atlas, &mut text_pass);
+            self.text_renderer.render(&self.text_atlas, &mut text_pass)
+        };
 
-            if let Err(ref e) = render_result {
-                log::error!("Text render error: {:?}", e);
-                return Err(format!("Text render error: {:?}", e));
+        if let Err(err) = render_result {
+            if matches!(
+                err,
+                RenderError::RemovedFromAtlas | RenderError::ScreenResolutionChanged
+            ) {
+                log::warn!(
+                    "Text render error {:?}; re-preparing atlas and retrying render",
+                    err
+                );
+
+                let mut font_system = self.font_system.lock().unwrap();
+                let mut prepare_attempt = 0;
+                let mut prepared = false;
+
+                while prepare_attempt < 2 && !prepared {
+                    let prepare_result = self.text_renderer.prepare(
+                        &self.device,
+                        &self.queue,
+                        &mut font_system,
+                        &mut self.text_atlas,
+                        Resolution { width, height },
+                        text_areas.iter().cloned(),
+                        &mut self.swash_cache,
+                    );
+
+                    match prepare_result {
+                        Ok(_) => prepared = true,
+                        Err(PrepareError::AtlasFull) => {
+                            prepare_attempt += 1;
+                            log::warn!(
+                                "Text atlas full during retry; trimming and retrying (attempt {prepare_attempt})"
+                            );
+                            self.text_atlas.trim();
+                        }
+                    }
+                }
+
+                drop(font_system);
+
+                if prepared {
+                    render_result = {
+                        let mut retry_pass =
+                            text_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Text Render Pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+
+                        self.text_renderer.render(&self.text_atlas, &mut retry_pass)
+                    };
+                } else {
+                    log::error!(
+                        "Text render failed after atlas trimming due to {:?}; giving up",
+                        err
+                    );
+                    return Err(format!("Text render error: {:?}", err));
+                }
             }
+        }
+
+        if let Err(ref e) = render_result {
+            log::error!("Text render error: {:?}", e);
+            return Err(format!("Text render error: {:?}", e));
         }
         self.queue.submit(std::iter::once(text_encoder.finish()));
 
