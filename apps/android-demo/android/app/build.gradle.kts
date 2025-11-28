@@ -146,10 +146,13 @@ tasks.register<Exec>("buildRustRelease") {
 }
 
 // Wire Rust builds to Android build variants
-tasks.named("preDebugBuild") {
-    dependsOn("buildRustDebug")
-}
-
-tasks.named("preReleaseBuild") {
-    dependsOn("buildRustRelease")
+afterEvaluate {
+    // Wire Rust builds to merge native libs tasks
+    tasks.matching { it.name.startsWith("merge") && it.name.contains("NativeLibs") }.configureEach {
+        if (name.contains("Debug", ignoreCase = true)) {
+            dependsOn("buildRustDebug")
+        } else if (name.contains("Release", ignoreCase = true)) {
+            dependsOn("buildRustRelease")
+        }
+    }
 }
