@@ -1,3 +1,5 @@
+import java.io.ByteArrayOutputStream
+
 plugins {
     id("com.android.application")
 }
@@ -67,13 +69,15 @@ dependencies {
 
 // Check if cargo-ndk is available
 fun checkCargoNdk() {
-    try {
-        exec {
-            commandLine("cargo", "ndk", "--version")
-            standardOutput = java.io.OutputStream.nullOutputStream()
-            errorOutput = java.io.OutputStream.nullOutputStream()
-        }
-    } catch (e: Exception) {
+    val result = exec {
+        commandLine("cargo", "ndk", "--version")
+        isIgnoreExitValue = true
+        // Output suppression: version check is silent
+        standardOutput = ByteArrayOutputStream()
+        errorOutput = ByteArrayOutputStream()
+    }
+
+    if (result.exitValue != 0) {
         throw GradleException(
             "cargo-ndk is not installed. Install it with:\n" +
             "    cargo install cargo-ndk\n" +
