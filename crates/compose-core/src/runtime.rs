@@ -87,6 +87,7 @@ impl StateArena {
 }
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static RUNTIME_HANDLES: RefCell<StdHashMap<RuntimeId, RuntimeHandle>> =
         RefCell::new(StdHashMap::new());
 }

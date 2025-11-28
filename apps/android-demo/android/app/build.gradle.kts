@@ -1,3 +1,5 @@
+import java.io.ByteArrayOutputStream
+
 plugins {
     id("com.android.application")
 }
@@ -12,19 +14,28 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-        }
     }
 
     buildTypes {
+        debug {
+            // Debug builds: x86_64 only for emulator (faster builds, smaller APK)
+            // Add "arm64-v8a" if testing on physical devices
+            ndk {
+                abiFilters.add("x86_64")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
+
+            // Release builds include all supported ABIs
+            ndk {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            }
         }
     }
 
@@ -34,7 +45,10 @@ android {
     }
 
     sourceSets {
-        getByName("main") {
+        getByName("debug") {
+            jniLibs.srcDirs("../../../target/android")
+        }
+        getByName("release") {
             jniLibs.srcDirs("../../../target/android")
         }
     }
@@ -44,16 +58,87 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
 }
 
-// Task to build Rust library for Android
-tasks.register<Exec>("buildRustAndroid") {
-    workingDir = file("../../../")
+// Check if cargo-ndk is available
+fun checkCargoNdk() {
+    val result = exec {
+        commandLine("cargo", "ndk", "--version")
+        isIgnoreExitValue = true
+        // Output suppression: version check is silent
+        standardOutput = ByteArrayOutputStream()
+        errorOutput = ByteArrayOutputStream()
+    }
 
+    if (result.exitValue != 0) {
+        throw GradleException(
+            "cargo-ndk is not installed. Install it with:\n" +
+            "    cargo install cargo-ndk\n" +
+            "See: https://github.com/bbqsrc/cargo-ndk"
+        )
+    }
+}
+
+// Task to build Rust library for Android debug builds
+tasks.register<Exec>("buildRustDebug") {
+    description = "Build Rust library for Android (debug, single ABI)"
+    group = "rust"
+
+    // Check cargo-ndk availability
+    doFirst {
+        checkCargoNdk()
+    }
+
+    workingDir = rootProject.projectDir
+
+    // Debug builds: x86_64 only for emulator (faster iteration)
     commandLine("sh", "-c", """
-        cargo ndk -o target/android -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 build -p desktop-app --lib --release --features android,renderer-wgpu --no-default-features
+        cargo ndk \
+            -t x86_64 \
+            -o target/android \
+            build \
+            -p desktop-app \
+            --lib \
+            --features android,renderer-wgpu \
+            --no-default-features
     """)
 }
 
-// Make preBuild depend on Rust build
-tasks.named("preBuild") {
-    dependsOn("buildRustAndroid")
+// Task to build Rust library for Android release builds
+tasks.register<Exec>("buildRustRelease") {
+    description = "Build Rust library for Android (release, all ABIs)"
+    group = "rust"
+
+    // Check cargo-ndk availability
+    doFirst {
+        checkCargoNdk()
+    }
+
+    workingDir = rootProject.projectDir
+
+    // Release builds: all supported ABIs
+    commandLine("sh", "-c", """
+        cargo ndk \
+            -t arm64-v8a \
+            -t armeabi-v7a \
+            -t x86 \
+            -t x86_64 \
+            -o target/android \
+            build \
+            --release \
+            -p desktop-app \
+            --lib \
+            --features android,renderer-wgpu \
+            --no-default-features
+    """)
+}
+
+// Wire Rust builds to Android build variants
+afterEvaluate {
+    // Wire Rust builds to merge native libs tasks
+    tasks.matching { it.name.startsWith("merge") && it.name.contains("NativeLibs") }.configureEach {
+        if (name.contains("Debug", ignoreCase = true)) {
+            dependsOn("buildRustDebug")
+        } else if (name.contains("Release", ignoreCase = true)) {
+            dependsOn("buildRustRelease")
+        }
+    }
 }

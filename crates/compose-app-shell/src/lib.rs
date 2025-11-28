@@ -30,6 +30,7 @@ where
     layout_tree: Option<LayoutTree>,
     layout_dirty: bool,
     scene_dirty: bool,
+    is_dirty: bool,
 }
 
 impl<R> AppShell<R>
@@ -56,6 +57,7 @@ where
             layout_tree: None,
             layout_dirty: true,
             scene_dirty: true,
+            is_dirty: true,
         };
         shell.process_frame();
         shell
@@ -64,6 +66,7 @@ where
     pub fn set_viewport(&mut self, width: f32, height: f32) {
         self.viewport = (width, height);
         self.layout_dirty = true;
+        self.mark_dirty();
         self.process_frame();
     }
 
@@ -103,6 +106,21 @@ where
         self.runtime.take_frame_request() || self.composition.should_render()
     }
 
+    /// Returns true if the shell needs to redraw (dirty flag or active animations).
+    pub fn needs_redraw(&self) -> bool {
+        self.is_dirty || self.has_active_animations()
+    }
+
+    /// Marks the shell as dirty, indicating a redraw is needed.
+    pub fn mark_dirty(&mut self) {
+        self.is_dirty = true;
+    }
+
+    /// Returns true if there are active animations or pending recompositions.
+    pub fn has_active_animations(&self) -> bool {
+        self.runtime.take_frame_request() || self.composition.should_render()
+    }
+
     pub fn update(&mut self) {
         let now = Instant::now();
         let frame_time = now
@@ -134,24 +152,38 @@ where
             }
         }
         self.process_frame();
+        // Clear dirty flag after update (frame has been processed)
+        self.is_dirty = false;
     }
 
-    pub fn set_cursor(&mut self, x: f32, y: f32) {
+    pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
         self.cursor = (x, y);
         if let Some(hit) = self.renderer.scene().hit_test(x, y) {
             hit.dispatch(PointerEventKind::Move, x, y);
+            self.mark_dirty();
+            true
+        } else {
+            false
         }
     }
 
-    pub fn pointer_pressed(&mut self) {
+    pub fn pointer_pressed(&mut self) -> bool {
         if let Some(hit) = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1) {
             hit.dispatch(PointerEventKind::Down, self.cursor.0, self.cursor.1);
+            self.mark_dirty();
+            true
+        } else {
+            false
         }
     }
 
-    pub fn pointer_released(&mut self) {
+    pub fn pointer_released(&mut self) -> bool {
         if let Some(hit) = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1) {
             hit.dispatch(PointerEventKind::Up, self.cursor.0, self.cursor.1);
+            self.mark_dirty();
+            true
+        } else {
+            false
         }
     }
 

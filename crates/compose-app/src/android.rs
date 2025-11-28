@@ -6,28 +6,77 @@
 use crate::launcher::AppSettings;
 use compose_app_shell::{default_root_key, AppShell};
 use compose_platform_android::AndroidPlatform;
-use compose_render_wgpu::{RendererConfig, WgpuRenderer};
+use compose_render_wgpu::WgpuRenderer;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 
-/// Surface state tuple containing all wgpu resources and the app shell.
-type SurfaceState = (
-    wgpu::Surface<'static>,
-    Arc<wgpu::Device>,
-    Arc<wgpu::Queue>,
-    wgpu::SurfaceConfiguration,
-    AppShell<WgpuRenderer>,
-);
+/// GPU resources for the surface (recreated when window is destroyed/created).
+struct GpuResources {
+    surface: wgpu::Surface<'static>,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    config: wgpu::SurfaceConfiguration,
+}
 
-/// Get display density placeholder.
-/// TODO: Wire proper density from Java/Kotlin side via extern "C" function.
-fn get_display_density() -> f32 {
-    // For now treat everything as 1.0 scale on Android.
-    // When we wire a proper Java → Rust bridge for DisplayMetrics,
-    // we can replace this.
-    1.0
+/// Get display density from Android NDK Configuration.
+///
+/// Uses the NDK's AConfiguration_getDensity which returns density constants
+/// mapped to the standard Android density classes:
+/// - mdpi: 1.0 (160 dpi baseline)
+/// - hdpi: 1.5 (240 dpi)
+/// - xhdpi: 2.0 (320 dpi) - most common modern phones
+/// - xxhdpi: 3.0 (480 dpi)
+/// - xxxhdpi: 4.0 (640 dpi)
+///
+/// The factor is calculated as DPI / 160 per Android NDK documentation.
+fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
+    let config = app.config();
+    let density_dpi = config.density(); // Returns Option<u32> with raw DPI value
+
+    // Convert DPI to scale factor (baseline is 160 dpi = 1.0x)
+    // e.g., 320 dpi / 160 = 2.0x (xhdpi)
+    density_dpi.map(|dpi| dpi as f32 / 160.0).unwrap_or(2.0) // Fallback to xhdpi (2.0) if density unavailable
+}
+
+/// Renders a single frame. Returns true if out of memory (should exit).
+fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>) -> bool {
+    shell.update();
+
+    match resources.surface.get_current_texture() {
+        Ok(frame) => {
+            let view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let (width, height) = shell.buffer_size();
+
+            if let Err(e) = shell.renderer().render(&view, width, height) {
+                log::error!("Render error: {:?}", e);
+            }
+
+            frame.present();
+            false
+        }
+        Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+            // Reconfigure surface using current size and config
+            let (width, height) = shell.buffer_size();
+            resources.config.width = width;
+            resources.config.height = height;
+            resources
+                .surface
+                .configure(&resources.device, &resources.config);
+            false
+        }
+        Err(wgpu::SurfaceError::OutOfMemory) => {
+            log::error!("Out of memory; exiting");
+            true
+        }
+        Err(e) => {
+            log::debug!("Surface error: {:?}", e);
+            false
+        }
+    }
 }
 
 /// Runs an Android Compose application with wgpu rendering.
@@ -38,13 +87,36 @@ fn get_display_density() -> f32 {
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 pub fn run(
     app: android_activity::AndroidApp,
-    _settings: AppSettings,
+    settings: AppSettings,
     content: impl FnMut() + 'static,
 ) {
     use android_activity::{input::MotionAction, InputStatus, MainEvent, PollEvent};
 
-    // Wrap content in Option so we can move it out when creating AppShell
-    let mut content = Some(content);
+    // Install panic hook for better crash logging in Logcat
+    std::panic::set_hook(Box::new(|panic_info| {
+        let location = panic_info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let message = panic_info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| *s)
+            .or_else(|| {
+                panic_info
+                    .payload()
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+            })
+            .unwrap_or("Box<dyn Any>");
+        log::error!("PANIC at {}: {}", location, message);
+    }));
+
+    // Wrap content in Rc<RefCell> for reuse across window recreations
+    let content = std::rc::Rc::new(std::cell::RefCell::new(content));
+
+    // App shell (created once, persists across window recreations)
+    let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
 
     // Initialize logging
     android_logger::init_once(
@@ -66,12 +138,8 @@ pub fn run(
     // Frame wake flag for event-driven rendering
     let need_frame = Arc::new(AtomicBool::new(false));
 
-    // Configure renderer for Android quirks
-    let renderer_config = RendererConfig {
-        force_atlas_recreation: false,
-        base_scale_factor: 1.0,
-        debug_text_logging: false,
-    };
+    // Exit flag for Destroy event (can't break from inside poll_events closure)
+    let should_exit = Arc::new(AtomicBool::new(false));
 
     // Initialize wgpu instance with GL and Vulkan backends
     // GL works better on emulators, but Vulkan is preferred on real devices
@@ -85,18 +153,28 @@ pub fn run(
     // Platform abstraction for density/pointer conversion
     let mut android_platform = AndroidPlatform::new();
 
-    // Surface state (initialized when window is ready)
-    let mut surface_state: Option<SurfaceState> = None;
-
-    let mut window_size = (0u32, 0u32);
-    let mut needs_redraw = false;
-
-    // Track if we just did a recomposition in WindowResized to avoid duplicate update()
-    let mut skip_next_update = false;
+    // GPU resources (recreated when window is destroyed/created)
+    let mut gpu_resources: Option<GpuResources> = None;
 
     // Main event loop
     loop {
-        app.poll_events(Some(std::time::Duration::from_millis(1)), |event| {
+        // Dynamic poll duration:
+        // - None when no window (paused, no surface)
+        // - ZERO when dirty or animating (immediate rendering)
+        // - None when idle (event-driven sleep)
+        let poll_duration = if gpu_resources.is_none() {
+            None // No window, sleep until next event
+        } else if let Some(shell) = &app_shell {
+            if shell.needs_redraw() {
+                Some(std::time::Duration::ZERO) // Dirty or animating, tight loop
+            } else {
+                None // Idle, sleep until next event
+            }
+        } else {
+            None
+        };
+
+        app.poll_events(poll_duration, |event| {
             match event {
                 PollEvent::Main(main_event) => match main_event {
                     MainEvent::InitWindow { .. } => {
@@ -106,22 +184,21 @@ pub fn run(
                             // Get actual window dimensions
                             let width = native_window.width() as u32;
                             let height = native_window.height() as u32;
-                            window_size = (width, height);
 
-                            use raw_window_handle::{
-                                AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle,
-                                RawWindowHandle,
-                            };
-
-                            // Create surface from the Android window
+                            // Create surface using raw window handle from NativeWindow
                             let surface = unsafe {
-                                let window_handle = AndroidNdkWindowHandle::new(
-                                    std::ptr::NonNull::new(native_window.ptr().as_ptr() as *mut _)
-                                        .expect("Null window pointer"),
-                                );
-                                let display_handle = AndroidDisplayHandle::new();
+                                use raw_window_handle::{
+                                    AndroidNdkWindowHandle, RawWindowHandle, RawDisplayHandle,
+                                    AndroidDisplayHandle,
+                                };
 
+                                let mut window_handle = AndroidNdkWindowHandle::new(
+                                    std::ptr::NonNull::new(native_window.ptr().as_ptr() as *mut _)
+                                        .expect("NativeWindow pointer is null")
+                                );
                                 let raw_window_handle = RawWindowHandle::AndroidNdk(window_handle);
+
+                                let display_handle = AndroidDisplayHandle::new();
                                 let raw_display_handle = RawDisplayHandle::Android(display_handle);
 
                                 let target = wgpu::SurfaceTargetUnsafe::RawHandle {
@@ -131,7 +208,7 @@ pub fn run(
 
                                 instance
                                     .create_surface_unsafe(target)
-                                    .expect("Failed to create surface")
+                                    .expect("Failed to create WGPU surface")
                             };
 
                             // Request adapter
@@ -185,57 +262,90 @@ pub fn run(
                             surface.configure(&device, &surface_config);
 
                             // Get display density and update platform
-                            let density = get_display_density();
+                            let density = get_display_density(&app);
                             android_platform.set_scale_factor(density as f64);
                             log::info!("Display density: {:.2}x", density);
 
-                            // Create renderer with Android configuration
-                            let mut renderer = WgpuRenderer::with_config(renderer_config.clone());
-                            renderer.init_gpu(device.clone(), queue.clone(), surface_format);
-                            renderer.set_root_scale(1.0);
+                            // Create or reuse app shell
+                            if app_shell.is_none() {
+                                // First initialization - create renderer and app shell
+                                let mut renderer = if let Some(fonts) = settings.fonts {
+                                    WgpuRenderer::new_with_fonts(fonts)
+                                } else {
+                                    WgpuRenderer::new()
+                                };
+                                renderer.init_gpu(device.clone(), queue.clone(), surface_format);
+                                renderer.set_root_scale(density);
 
-                            // Create app shell with content (take from Option)
-                            let mut app_shell = AppShell::new(
-                                renderer,
-                                default_root_key(),
-                                content.take().expect("content already used"),
-                            );
+                                // Create app shell with content closure
+                                let content_clone = content.clone();
+                                let shell =
+                                    AppShell::new(renderer, default_root_key(), move || {
+                                        content_clone.borrow_mut()()
+                                    });
 
-                            // Wire frame waker for event-driven rendering
-                            {
-                                let need_frame = need_frame.clone();
-                                app_shell.set_frame_waker(move || {
-                                    need_frame.store(true, Ordering::Relaxed);
-                                });
+                                app_shell = Some(shell);
+
+                                // Wire frame waker for event-driven rendering
+                                if let Some(shell) = &mut app_shell {
+                                    let need_frame = need_frame.clone();
+                                    shell.set_frame_waker(move || {
+                                        need_frame.store(true, Ordering::Relaxed);
+                                    });
+                                }
+
+                                log::info!("App shell created");
+                            } else {
+                                // Window recreated - reinitialize GPU resources
+                                if let Some(shell) = &mut app_shell {
+                                    shell.renderer().init_gpu(
+                                        device.clone(),
+                                        queue.clone(),
+                                        surface_format,
+                                    );
+                                    shell.renderer().set_root_scale(density);
+                                    log::info!("Renderer reinitialized with new GPU resources");
+                                }
                             }
 
-                            app_shell.set_buffer_size(width, height);
+                            // Set buffer_size and viewport
+                            if let Some(shell) = &mut app_shell {
+                                shell.set_buffer_size(width, height);
 
-                            // Set viewport to physical pixels (matches desktop behavior)
-                            app_shell.set_viewport(width as f32, height as f32);
-                            log::info!(
-                                "Set viewport to {}x{} physical pixels at {:.2}x density",
-                                width,
-                                height,
-                                density
-                            );
+                                let width_dp = width as f32 / density;
+                                let height_dp = height as f32 / density;
+                                shell.set_viewport(width_dp, height_dp);
+                                log::info!(
+                                    "Set viewport to {:.1}x{:.1} dp ({}x{} px at {:.2}x density)",
+                                    width_dp,
+                                    height_dp,
+                                    width,
+                                    height,
+                                    density
+                                );
+                            }
 
-                            surface_state = Some((surface, device, queue, surface_config, app_shell));
+                            // Store GPU resources
+                            gpu_resources = Some(GpuResources {
+                                surface,
+                                device,
+                                queue,
+                                config: surface_config,
+                            });
 
                             log::info!("Rendering initialized successfully");
                         }
                     }
                     MainEvent::TerminateWindow { .. } => {
                         log::info!("Window terminated");
-                        surface_state = None;
+                        gpu_resources = None;
                     }
                     MainEvent::WindowResized { .. } => {
                         if let Some(native_window) = app.native_window() {
                             let width = native_window.width() as u32;
                             let height = native_window.height() as u32;
-                            window_size = (width, height);
 
-                            let density = get_display_density();
+                            let density = get_display_density(&app);
                             android_platform.set_scale_factor(density as f64);
                             log::info!(
                                 "Window resized to {}x{} at {:.2}x density",
@@ -244,28 +354,53 @@ pub fn run(
                                 density
                             );
 
-                            if let Some((surface, device, _, surface_config, app_shell)) =
-                                &mut surface_state
+                            if let (Some(resources), Some(shell)) =
+                                (&mut gpu_resources, &mut app_shell)
                             {
                                 if width > 0 && height > 0 {
-                                    surface_config.width = width;
-                                    surface_config.height = height;
-                                    surface.configure(device, surface_config);
-                                    app_shell.set_buffer_size(width, height);
+                                    resources.config.width = width;
+                                    resources.config.height = height;
+                                    resources
+                                        .surface
+                                        .configure(&resources.device, &resources.config);
 
-                                    // Set viewport to physical pixels (matches desktop behavior)
-                                    app_shell.set_viewport(width as f32, height as f32);
+                                    // Set buffer_size to physical pixels
+                                    shell.set_buffer_size(width, height);
 
-                                    // Force immediate recomposition after viewport change
-                                    app_shell.update();
-                                    skip_next_update = true;
-                                    log::info!("Forced recomposition after viewport change");
+                                    // Set viewport to logical dp (marks dirty internally)
+                                    let width_dp = width as f32 / density;
+                                    let height_dp = height as f32 / density;
+                                    shell.set_viewport(width_dp, height_dp);
+
+                                    // Update renderer scale
+                                    shell.renderer().set_root_scale(density);
                                 }
                             }
                         }
                     }
                     MainEvent::RedrawNeeded { .. } => {
-                        needs_redraw = true;
+                        if let Some(shell) = &mut app_shell {
+                            shell.mark_dirty();
+                        }
+                    }
+                    MainEvent::Pause => {
+                        log::info!("App paused");
+                    }
+                    MainEvent::Resume { .. } => {
+                        log::info!("App resumed");
+                    }
+                    MainEvent::Start => {
+                        log::info!("App started");
+                    }
+                    MainEvent::Stop => {
+                        log::info!("App stopped");
+                    }
+                    MainEvent::SaveState { .. } => {
+                        log::info!("Save state requested (hook for future serialization)");
+                    }
+                    MainEvent::Destroy => {
+                        log::info!("App destroy requested, will exit after this event");
+                        should_exit.store(true, Ordering::Relaxed);
                     }
                     _ => {}
                 },
@@ -278,40 +413,28 @@ pub fn run(
                                     android_activity::input::InputEvent::MotionEvent(
                                         motion_event,
                                     ) => {
-                                        // Get pointer position in physical pixels (matches viewport coordinates)
+                                        // Get pointer position in physical pixels and convert to logical dp
                                         let pointer = motion_event.pointer_at_index(0);
-                                        let x = pointer.x();
-                                        let y = pointer.y();
-
-                                        log::info!("MotionEvent: action={:?} pos=({:.1}, {:.1})", motion_event.action(), x, y);
+                                        let x_px = pointer.x() as f64;
+                                        let y_px = pointer.y() as f64;
+                                        let logical = android_platform.pointer_position(x_px, y_px);
 
                                         match motion_event.action() {
                                             MotionAction::Down | MotionAction::PointerDown => {
-                                                if let Some((_, _, _, _, app_shell)) =
-                                                    &mut surface_state
-                                                {
-                                                    app_shell.set_cursor(x, y);
-                                                    app_shell.pointer_pressed();
-                                                    needs_redraw = true;
+                                                if let Some(shell) = &mut app_shell {
+                                                    shell.set_cursor(logical.x, logical.y);
+                                                    shell.pointer_pressed();
                                                 }
                                             }
                                             MotionAction::Up | MotionAction::PointerUp => {
-                                                if let Some((_, _, _, _, app_shell)) =
-                                                    &mut surface_state
-                                                {
-                                                    app_shell.set_cursor(x, y);
-                                                    app_shell.pointer_released();
-                                                    needs_redraw = true;
+                                                if let Some(shell) = &mut app_shell {
+                                                    shell.set_cursor(logical.x, logical.y);
+                                                    shell.pointer_released();
                                                 }
                                             }
                                             MotionAction::Move => {
-                                                if let Some((_, _, _, _, app_shell)) =
-                                                    &mut surface_state
-                                                {
-                                                    app_shell.set_cursor(x, y);
-                                                    if app_shell.should_render() {
-                                                        needs_redraw = true;
-                                                    }
+                                                if let Some(shell) = &mut app_shell {
+                                                    shell.set_cursor(logical.x, logical.y);
                                                 }
                                             }
                                             _ => {}
@@ -337,46 +460,24 @@ pub fn run(
 
         // Check if app side requested a frame (animations, state changes)
         if need_frame.swap(false, Ordering::Relaxed) {
-            needs_redraw = true;
+            if let Some(shell) = &mut app_shell {
+                shell.mark_dirty();
+            }
         }
 
-        // Render outside event callback
-        if needs_redraw && surface_state.is_some() {
-            if let Some((surface, _, _, _, app_shell)) = &mut surface_state {
-                // Skip update if we just did it in WindowResized
-                if skip_next_update {
-                    skip_next_update = false;
-                } else {
-                    app_shell.update();
-                }
+        // Check if Destroy event requested exit
+        if should_exit.load(Ordering::Relaxed) {
+            log::info!("Exiting cleanly after Destroy event");
+            break;
+        }
 
-                match surface.get_current_texture() {
-                    Ok(frame) => {
-                        let view =
-                            frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-                        let (width, height) = app_shell.buffer_size();
-
-                        if let Err(e) = app_shell.renderer().render(&view, width, height) {
-                            log::error!("Render error: {:?}", e);
-                        }
-
-                        frame.present();
-                    }
-                    Err(wgpu::SurfaceError::Lost) => {
-                        log::warn!("Surface lost, will be reconfigured");
-                    }
-                    Err(wgpu::SurfaceError::OutOfMemory) => {
-                        log::error!("Out of memory!");
-                        break;
-                    }
-                    Err(e) => {
-                        log::debug!("Surface error: {:?}", e);
-                    }
+        // Render outside event callback if needed
+        if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
+            if shell.needs_redraw() {
+                if render_once(resources, shell) {
+                    break; // Out of memory, exit
                 }
             }
-            needs_redraw = false;
         }
     }
 }
