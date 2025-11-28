@@ -134,16 +134,16 @@ pub fn run(
     // Main event loop
     loop {
         // Dynamic poll duration:
-        // - None when no window (event-driven sleep)
-        // - ZERO when animating (tight loop)
-        // - None when idle (event-driven)
+        // - None when no window (paused, no surface)
+        // - ZERO when dirty or animating (immediate rendering)
+        // - Short timeout when idle (allows responsive input without ANR)
         let poll_duration = if surface_state.is_none() {
             None // No window, sleep until next event
         } else if let Some(state) = &surface_state {
-            if state.app_shell.has_active_animations() {
-                Some(std::time::Duration::ZERO) // Tight loop for animations
+            if state.app_shell.needs_redraw() {
+                Some(std::time::Duration::ZERO) // Dirty or animating, tight loop
             } else {
-                None // Idle, sleep until next event
+                Some(std::time::Duration::from_millis(16)) // Idle, ~60fps polling for input responsiveness
             }
         } else {
             None
