@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RS-Compose Web Demo</title>
+    <title>RS-Compose Demo</title>
     <style>
         body {
             margin: 0;
@@ -86,7 +86,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>🚀 RS-Compose Web Demo</h1>
+        <h1>🚀 RS-Compose Demo</h1>
         <p class="subtitle">Jetpack Compose-inspired UI framework for Rust</p>
 
         <canvas id="compose-canvas" width="800" height="600"></canvas>
@@ -96,6 +96,7 @@
 
         <div class="info">
             <p>Powered by Rust 🦀 + WebAssembly + WebGPU</p>
+            <p>Full demo with interactive examples, animations, and more!</p>
         </div>
 
         <div class="links">
@@ -108,7 +109,7 @@
         async function init() {
             try {
                 // Import the WASM module
-                const { run_app } = await import('./pkg/web_demo.js');
+                const { run_app } = await import('./pkg/desktop_app.js');
 
                 // Run the app
                 await run_app();

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "Building RS-Compose Web Demo..."
+echo "Building RS-Compose Demo for Web..."
 
 # Check if wasm-pack is installed
 if ! command -v wasm-pack &> /dev/null; then
@@ -10,9 +10,9 @@ if ! command -v wasm-pack &> /dev/null; then
     exit 1
 fi
 
-# Build the WASM module
+# Build the WASM module with web feature
 echo "Building WASM module..."
-wasm-pack build --target web --out-dir pkg
+wasm-pack build --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
 
 echo ""
 echo "Build complete! 🎉"

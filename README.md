@@ -41,7 +41,7 @@ For detailed Android build instructions, see [`apps/android-demo/README.md`](app
 
 ### Web
 
-Build and run the web demo:
+Build and run the demo in your browser:
 
 1. Install prerequisites:
    ```bash
@@ -49,20 +49,16 @@ Build and run the web demo:
    cargo install wasm-pack
    ```
 
-2. Build the WASM module:
+2. Build and run:
    ```bash
-   cd apps/web-demo
-   ./build.sh
-   ```
-
-3. Start a local web server:
-   ```bash
+   cd apps/desktop-demo
+   ./build-web.sh
    python3 -m http.server 8080
    ```
 
-4. Open http://localhost:8080 in a WebGPU-compatible browser (Chrome 113+, Edge 113+, or Safari 18+)
+3. Open http://localhost:8080 in a WebGPU-compatible browser (Chrome 113+, Edge 113+, or Safari 18+)
 
-For detailed web build instructions, see [`apps/web-demo/README.md`](apps/web-demo/README.md).
+For detailed web build instructions, see [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md).
 
 ## Quick Start
 
@@ -125,7 +121,9 @@ fn my_app() {
 }
 ```
 
-For a complete working example, see [`apps/desktop-demo`](apps/desktop-demo).
+## Multi-Platform Example
+
+The desktop demo (`apps/desktop-demo`) demonstrates running the **same codebase** on all three platforms (Desktop, Android, and Web). See [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md) for detailed build instructions for each platform.
 
 ## Roadmap
 
