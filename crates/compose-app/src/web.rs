@@ -68,14 +68,24 @@ pub async fn run(canvas_id: &str, settings: AppSettings, content: impl FnMut() +
         .await
         .ok_or("failed to find suitable adapter")?;
 
-    // For web, don't request any specific limits - let the browser decide what it supports
-    // Chrome's WebGPU is experimental and doesn't recognize some limit names yet
+    // For web, we hit an incompatibility: wgpu 0.19 uses WebGPU spec field names
+    // that Chrome doesn't recognize yet (e.g., "maxInterStageShaderComponents" vs
+    // "maxInterStageShaderVariables"). To work around this, we construct the most
+    // minimal limits possible, avoiding fields Chrome rejects.
+    let limits = wgpu::Limits {
+        // Only set the absolute minimum required fields to non-zero values
+        max_bind_groups: 4,
+        max_texture_dimension_2d: 2048,
+        // Leave everything else at 0 to avoid requesting unsupported limits
+        ..Default::default()
+    };
+
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("Main Device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: Default::default(),
+                required_limits: limits,
             },
             None,
         )
