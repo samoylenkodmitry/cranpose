@@ -566,8 +566,12 @@ dependencies = [
  "compose-foundation",
  "compose-macros",
  "compose-render-common",
+ "compose-render-wgpu",
  "compose-ui",
  "compose-ui-graphics",
+ "pollster",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
