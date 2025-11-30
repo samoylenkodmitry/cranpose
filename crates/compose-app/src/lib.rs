@@ -18,5 +18,6 @@ pub mod android;
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu"))]
 pub mod desktop;
 
+// Re-export robot types from desktop module when robot feature is enabled
 #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
-pub mod desktop_robot;
+pub use desktop::{run_with_robot, RobotAppHandle, RobotCommand};

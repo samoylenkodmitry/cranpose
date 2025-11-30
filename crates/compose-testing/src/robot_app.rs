@@ -6,8 +6,8 @@
 //! **Important:** This module wraps the REAL desktop app runner from `compose-app`,
 //! ensuring tests use the exact same code path as the production app.
 
-// Re-export the real desktop robot runner
-pub use compose_app::desktop_robot::{run_with_robot, RobotAppHandle, RobotCommand};
+// Re-export the integrated desktop robot runner
+pub use compose_app::{run_with_robot, RobotAppHandle, RobotCommand};
 
 use compose_app::AppSettings;
 
@@ -69,8 +69,20 @@ impl RobotApp {
     }
 
     /// Take a screenshot and save to file
-    pub fn screenshot(&self, path: &str) -> Result<(), String> {
+    ///
+    /// Returns (width, height) of the screenshot
+    pub fn screenshot(&self, path: &str) -> Result<(u32, u32), String> {
         self.handle.screenshot(path)
+    }
+
+    /// Wait for a number of frames to be rendered
+    pub fn wait_frames(&self, count: u32) -> Result<(), String> {
+        self.handle.wait_frames(count)
+    }
+
+    /// Resize the window
+    pub fn resize(&self, width: u32, height: u32) -> Result<(), String> {
+        self.handle.resize(width, height)
     }
 
     /// Shutdown the app
