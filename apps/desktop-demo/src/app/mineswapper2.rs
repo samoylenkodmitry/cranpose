@@ -3,7 +3,6 @@ use compose_ui::{
     composable, Brush, Button, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
     Row, RowSpec, Size, Spacer, Text, VerticalAlignment,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MineswapperTool {
@@ -229,10 +228,20 @@ impl MineswapperGame {
 }
 
 fn random_seed() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(12345);
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use instant::SystemTime;
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64
+    }
 }
 
 #[composable]

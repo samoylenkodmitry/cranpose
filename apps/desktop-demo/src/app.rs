@@ -12,8 +12,11 @@ use compose_ui::{
 use std::cell::RefCell;
 
 mod mineswapper2;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod web_fetch;
 
+#[cfg(not(target_arch = "wasm32"))]
 use web_fetch::web_fetch_example;
 
 thread_local! {
@@ -26,6 +29,7 @@ pub enum DemoTab {
     Counter,
     CompositionLocal,
     Async,
+    #[cfg(not(target_arch = "wasm32"))]
     WebFetch,
     Layout,
     ModifierShowcase,
@@ -38,6 +42,7 @@ impl DemoTab {
             DemoTab::Counter => "Counter App",
             DemoTab::CompositionLocal => "CompositionLocal Test",
             DemoTab::Async => "Async Runtime",
+            #[cfg(not(target_arch = "wasm32"))]
             DemoTab::WebFetch => "Web Fetch",
             DemoTab::Layout => "Recursive Layout",
             DemoTab::ModifierShowcase => "Modifiers Showcase",
@@ -95,12 +100,23 @@ fn local_holder() -> CompositionLocal<Holder> {
 }
 
 fn random() -> i32 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
-    (nanos % 10000) as i32
+    // For WASM compatibility, use a simple counter-based seed
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        (COUNTER.fetch_add(1, Ordering::Relaxed) % 10000) as i32
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use instant::SystemTime;
+
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        (nanos % 10000) as i32
+    }
 }
 
 #[composable]
@@ -161,6 +177,7 @@ pub fn combined_app() {
                     render_tab_button(DemoTab::Counter);
                     render_tab_button(DemoTab::CompositionLocal);
                     render_tab_button(DemoTab::Async);
+                    #[cfg(not(target_arch = "wasm32"))]
                     render_tab_button(DemoTab::WebFetch);
                     render_tab_button(DemoTab::Layout);
                     render_tab_button(DemoTab::ModifierShowcase);
@@ -178,6 +195,7 @@ pub fn combined_app() {
                 DemoTab::Counter => counter_app(),
                 DemoTab::CompositionLocal => composition_local_example(),
                 DemoTab::Async => async_runtime_example(),
+                #[cfg(not(target_arch = "wasm32"))]
                 DemoTab::WebFetch => web_fetch_example(),
                 DemoTab::Layout => recursive_layout_example(),
                 DemoTab::ModifierShowcase => modifier_showcase_tab(),
@@ -779,15 +797,16 @@ fn counter_app() {
     let fetch_key = fetch_request.get();
     {
         let async_message_state = async_message;
-        LaunchedEffect!(fetch_key, move |scope| {
+        LaunchedEffect!(fetch_key, move |_scope| {
             if fetch_key == 0 {
                 return;
             }
             let message_for_ui = async_message_state;
-            scope.launch_background(
+            #[cfg(not(target_arch = "wasm32"))]
+            _scope.launch_background(
                 move |token| {
+                    use instant::{Duration, SystemTime};
                     use std::thread;
-                    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
                     for _ in 0..5 {
                         if token.is_cancelled() {
@@ -797,7 +816,7 @@ fn counter_app() {
                     }
 
                     let nanos = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
+                        .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap()
                         .subsec_nanos();
                     format!("Background fetch #{fetch_key}: {}", nanos % 1000)
@@ -809,6 +828,12 @@ fn counter_app() {
                     message_for_ui.set(value);
                 },
             );
+            // On WASM, immediately set a message since we can't use background threads
+            #[cfg(target_arch = "wasm32")]
+            message_for_ui.set(format!(
+                "WASM: Background threads not supported (fetch #{})",
+                fetch_key
+            ));
         });
     }
     LaunchedEffect!(counter.get(), |_| println!("effect call"));

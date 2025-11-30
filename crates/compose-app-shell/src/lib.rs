@@ -1,7 +1,8 @@
 #![allow(clippy::type_complexity)]
 
 use std::fmt::Debug;
-use std::time::Instant;
+// Use instant crate for cross-platform time support (native + WASM)
+use instant::Instant;
 
 use compose_core::{location_key, Composition, Key, MemoryApplier, NodeError};
 use compose_foundation::PointerEventKind;
@@ -88,7 +89,13 @@ where
         &mut self.renderer
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + Sync + 'static) {
+        self.runtime.set_frame_waker(waker);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + 'static) {
         self.runtime.set_frame_waker(waker);
     }
 

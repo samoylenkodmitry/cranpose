@@ -2,9 +2,15 @@
 [WIP.webm](https://github.com/user-attachments/assets/00533605-aa9c-4555-896c-c939195e3dce)
 
 
-# RS-Compose 
+# RS-Compose
 
 Compose-RS is a Jetpack Compose–inspired declarative UI framework. The repository accompanies the architectural proposal documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and provides crate scaffolding for the core runtime, procedural macros, UI primitives, and example applications.
+
+## 🌐 Live Demo
+
+**[Try it in your browser!](https://samoylenkodmitry.github.io/rs-compose/)**
+
+The demo showcases the full RS-Compose framework running in the browser via WebAssembly and WebGL2.
 
 ## Examples
 
@@ -38,6 +44,27 @@ Build and run the Android demo app:
    ```
 
 For detailed Android build instructions, see [`apps/android-demo/README.md`](apps/android-demo/README.md).
+
+### Web
+
+Build and run the demo in your browser using WebGL2:
+
+1. Install prerequisites:
+   ```bash
+   rustup target add wasm32-unknown-unknown
+   cargo install wasm-pack
+   ```
+
+2. Build and run:
+   ```bash
+   cd apps/desktop-demo
+   ./build-web.sh
+   python3 -m http.server 8080
+   ```
+
+3. Open http://localhost:8080 in any modern browser (Chrome, Firefox, Edge, Safari)
+
+For detailed web build instructions, see [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md).
 
 ## Quick Start
 
@@ -79,7 +106,30 @@ fn my_app() {
 }
 ```
 
-For a complete working example, see [`apps/desktop-demo`](apps/desktop-demo).
+### Web
+
+```rust
+use compose_app::AppLauncher;
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub async fn run_app() -> Result<(), JsValue> {
+    AppLauncher::new()
+        .with_title("My Compose App")
+        .with_size(800, 600)
+        .run_web("canvas-id", my_app)
+        .await
+}
+
+#[composable]
+fn my_app() {
+    Text("Hello, Compose!");
+}
+```
+
+## Multi-Platform Example
+
+The desktop demo (`apps/desktop-demo`) demonstrates running the **same codebase** on all three platforms (Desktop, Android, and Web). See [`apps/desktop-demo/README.md`](apps/desktop-demo/README.md) for detailed build instructions for each platform.
 
 ## Roadmap
 
