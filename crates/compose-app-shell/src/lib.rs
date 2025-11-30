@@ -87,7 +87,13 @@ where
         &mut self.renderer
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + Sync + 'static) {
+        self.runtime.set_frame_waker(waker);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + 'static) {
         self.runtime.set_frame_waker(waker);
     }
 

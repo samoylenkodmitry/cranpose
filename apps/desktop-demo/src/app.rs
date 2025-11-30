@@ -100,12 +100,22 @@ fn local_holder() -> CompositionLocal<Holder> {
 }
 
 fn random() -> i32 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
-    (nanos % 10000) as i32
+    use instant::{SystemTime, Duration};
+    // For WASM compatibility, use a simple counter-based seed
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        (COUNTER.fetch_add(1, Ordering::Relaxed) % 10000) as i32
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        (nanos % 10000) as i32
+    }
 }
 
 #[composable]
@@ -791,10 +801,11 @@ fn counter_app() {
                 return;
             }
             let message_for_ui = async_message_state;
+            #[cfg(not(target_arch = "wasm32"))]
             scope.launch_background(
                 move |token| {
                     use std::thread;
-                    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+                    use instant::{Duration, SystemTime};
 
                     for _ in 0..5 {
                         if token.is_cancelled() {
@@ -804,7 +815,7 @@ fn counter_app() {
                     }
 
                     let nanos = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
+                        .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap()
                         .subsec_nanos();
                     format!("Background fetch #{fetch_key}: {}", nanos % 1000)
@@ -816,6 +827,9 @@ fn counter_app() {
                     message_for_ui.set(value);
                 },
             );
+            // On WASM, immediately set a message since we can't use background threads
+            #[cfg(target_arch = "wasm32")]
+            message_for_ui.set(format!("WASM: Background threads not supported (fetch #{})", fetch_key));
         });
     }
     LaunchedEffect!(counter.get(), |_| println!("effect call"));

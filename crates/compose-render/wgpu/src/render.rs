@@ -81,10 +81,15 @@ struct ShapeBatchBuffers {
 
 impl ShapeBatchBuffers {
     fn new(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
-        let initial_vertex_cap = 64; // 16 shapes * 4 vertices
-        let initial_index_cap = 96; // 16 shapes * 6 indices
-        let initial_shape_cap = 16;
-        let initial_gradient_cap = 16;
+        // For WebGL uniform buffers, size MUST match shader declaration (256 shapes)
+        // Shader declares: var<uniform> shape_data: array<ShapeData, 256>
+        const WEBGL_UNIFORM_SHAPE_COUNT: usize = 256;
+        const WEBGL_UNIFORM_GRADIENT_COUNT: usize = 256;
+
+        let initial_vertex_cap = WEBGL_UNIFORM_SHAPE_COUNT * 4; // 4 vertices per shape
+        let initial_index_cap = WEBGL_UNIFORM_SHAPE_COUNT * 6;  // 6 indices per shape
+        let initial_shape_cap = WEBGL_UNIFORM_SHAPE_COUNT;
+        let initial_gradient_cap = WEBGL_UNIFORM_GRADIENT_COUNT;
 
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shape Vertex Buffer"),

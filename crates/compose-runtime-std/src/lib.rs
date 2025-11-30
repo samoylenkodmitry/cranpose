@@ -12,10 +12,27 @@ use std::time::{Duration, Instant};
 
 use compose_core::{Clock, FrameClock, Runtime, RuntimeHandle, RuntimeScheduler};
 
+// On WASM, wrap closures to make them Sync since WASM is single-threaded
+#[cfg(target_arch = "wasm32")]
+struct SyncWaker<F>(F);
+
+#[cfg(target_arch = "wasm32")]
+unsafe impl<F> Sync for SyncWaker<F> {}
+
+#[cfg(target_arch = "wasm32")]
+impl<F: Fn()> SyncWaker<F> {
+    fn call(&self) {
+        (self.0)();
+    }
+}
+
 /// Scheduler that delegates work to Rust's threading primitives.
 pub struct StdScheduler {
     frame_requested: AtomicBool,
+    #[cfg(not(target_arch = "wasm32"))]
     frame_waker: RwLock<Option<Arc<dyn Fn() + Send + Sync + 'static>>>,
+    #[cfg(target_arch = "wasm32")]
+    frame_waker: RwLock<Option<Arc<SyncWaker<Box<dyn Fn() + Send + 'static>>>>>,
 }
 
 impl StdScheduler {
@@ -32,8 +49,14 @@ impl StdScheduler {
     }
 
     /// Registers a waker that will be invoked whenever a new frame is scheduled.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_frame_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
         *self.frame_waker.write().unwrap() = Some(Arc::new(waker));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_frame_waker(&self, waker: impl Fn() + Send + 'static) {
+        *self.frame_waker.write().unwrap() = Some(Arc::new(SyncWaker(Box::new(waker))));
     }
 
     /// Clears any registered frame waker.
@@ -41,10 +64,19 @@ impl StdScheduler {
         *self.frame_waker.write().unwrap() = None;
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn wake(&self) {
         let waker = self.frame_waker.read().unwrap().clone();
         if let Some(waker) = waker {
             waker();
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn wake(&self) {
+        let waker = self.frame_waker.read().unwrap().clone();
+        if let Some(waker) = waker {
+            waker.call();
         }
     }
 }
@@ -147,7 +179,13 @@ impl StdRuntime {
     }
 
     /// Registers a waker to be called when the runtime schedules a new frame.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_frame_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
+        self.scheduler.set_frame_waker(waker);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_frame_waker(&self, waker: impl Fn() + Send + 'static) {
         self.scheduler.set_frame_waker(waker);
     }
 

@@ -34,6 +34,7 @@ compose-core = { path = "../../crates/compose-core" }
 compose-ui = { path = "../../crates/compose-ui" }
 compose-foundation = { path = "../../crates/compose-foundation" }
 log = "0.4"
+instant = { version = "0.1", features = ["wasm-bindgen"] }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 wasm-logger = { version = "0.2", optional = true }
