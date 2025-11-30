@@ -41,6 +41,8 @@ enum RobotResponse {
 struct RobotController {
     rx: mpsc::Receiver<RobotCommand>,
     tx: mpsc::Sender<RobotResponse>,
+    waiting_for_idle: bool,
+    idle_iterations: u32,
 }
 
 #[cfg(feature = "robot")]
@@ -52,6 +54,8 @@ impl RobotController {
         let controller = RobotController {
             rx: cmd_rx,
             tx: resp_tx,
+            waiting_for_idle: false,
+            idle_iterations: 0,
         };
 
         let robot = Robot {
@@ -126,9 +130,9 @@ impl Robot {
 pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
     let mut builder = EventLoopBuilder::new();
 
-    // On Linux, allow creating event loop on any thread
-    #[cfg(target_os = "linux")]
-    {
+    // On Linux, allow creating event loop on any thread when robot driver is active
+    #[cfg(all(target_os = "linux", feature = "robot"))]
+    if settings.test_driver.is_some() {
         use winit::platform::x11::EventLoopBuilderExtX11;
         builder.with_any_thread(true);
     }
@@ -140,7 +144,7 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
 
     // Spawn test driver if present
     #[cfg(feature = "robot")]
-    let robot_controller = if let Some(driver) = settings.test_driver {
+    let mut robot_controller = if let Some(driver) = settings.test_driver {
         let (controller, robot) = RobotController::new();
         std::thread::spawn(move || {
             driver(robot);
@@ -353,7 +357,8 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
             Event::AboutToWait | Event::UserEvent(()) => {
                 // Handle pending robot commands
                 #[cfg(feature = "robot")]
-                if let Some(controller) = &robot_controller {
+                if let Some(controller) = &mut robot_controller {
+                    // Process new commands
                     while let Ok(cmd) = controller.rx.try_recv() {
                         match cmd {
                             RobotCommand::Click { x, y } => {
@@ -383,18 +388,35 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                                 let _ = controller.tx.send(RobotResponse::Ok);
                             }
                             RobotCommand::WaitForIdle => {
-                                // If idle, respond immediately
-                                if !app.needs_redraw() && !app.has_active_animations() {
-                                    let _ = controller.tx.send(RobotResponse::Ok);
-                                } else {
-                                    // Force update and respond
-                                    app.update();
-                                    let _ = controller.tx.send(RobotResponse::Ok);
-                                }
+                                // Start waiting for idle
+                                controller.waiting_for_idle = true;
+                                controller.idle_iterations = 0;
                             }
                             RobotCommand::Exit => {
                                 let _ = controller.tx.send(RobotResponse::Ok);
                                 elwt.exit();
+                            }
+                        }
+                    }
+
+                    // Handle ongoing wait_for_idle
+                    if controller.waiting_for_idle {
+                        const MAX_IDLE_ITERATIONS: u32 = 200;
+
+                        if !app.needs_redraw() && !app.has_active_animations() {
+                            // App is idle - respond and stop waiting
+                            controller.waiting_for_idle = false;
+                            let _ = controller.tx.send(RobotResponse::Ok);
+                        } else {
+                            // Not idle yet - update and check iteration limit
+                            app.update();
+                            controller.idle_iterations += 1;
+
+                            if controller.idle_iterations >= MAX_IDLE_ITERATIONS {
+                                controller.waiting_for_idle = false;
+                                let _ = controller.tx.send(RobotResponse::Error(
+                                    "wait_for_idle: timed out after 200 iterations".to_string()
+                                ));
                             }
                         }
                     }
@@ -403,8 +425,17 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                 if app.needs_redraw() {
                     window.request_redraw();
                 }
-                // Use Poll for animations or if robot is active, Wait for idle otherwise
-                if app.has_active_animations() || robot_controller.is_some() {
+
+                // Smart ControlFlow: only Poll when necessary
+                #[cfg(feature = "robot")]
+                let robot_needs_poll = robot_controller.as_ref()
+                    .map(|c| c.waiting_for_idle)
+                    .unwrap_or(false);
+
+                #[cfg(not(feature = "robot"))]
+                let robot_needs_poll = false;
+
+                if app.has_active_animations() || robot_needs_poll {
                     elwt.set_control_flow(ControlFlow::Poll);
                 } else {
                     elwt.set_control_flow(ControlFlow::Wait);

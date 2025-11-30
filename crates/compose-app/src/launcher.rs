@@ -16,7 +16,7 @@ pub struct AppSettings {
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
     /// Optional test driver to control the application (robot testing)
-    #[cfg(feature = "robot")]
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
     pub test_driver: Option<Box<dyn FnOnce(crate::desktop::Robot) + Send + 'static>>,
 }
 
@@ -28,7 +28,7 @@ impl Default for AppSettings {
             initial_height: 600,
             fonts: None,
             android_use_system_fonts: false,
-            #[cfg(feature = "robot")]
+            #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
             test_driver: None,
         }
     }
@@ -134,7 +134,7 @@ impl AppLauncher {
     ///         // Your composable UI here
     ///     });
     /// ```
-    #[cfg(feature = "robot")]
+    #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
     pub fn with_test_driver(mut self, driver: impl FnOnce(crate::desktop::Robot) + Send + 'static) -> Self {
         self.settings.test_driver = Some(Box::new(driver));
         self
