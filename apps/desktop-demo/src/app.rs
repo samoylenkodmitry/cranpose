@@ -121,19 +121,33 @@ fn random() -> i32 {
 
 #[composable]
 pub fn combined_app() {
-    let active_tab = compose_core::useState(|| DemoTab::Counter);
+    let active_tab = compose_core::useState(|| {
+        // Default to Counter for now
+        // DemoTab::Counter
+        // DemoTab::AsyncRuntime
+        DemoTab::Counter
+    });
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab);
     });
 
+    // Create scroll state for tabs row
+    let tabs_scroll_state = compose_core::remember(|| compose_ui::ScrollState::new(0.0))
+        .with(|state| state.clone());
+    let column_scroll_state = compose_core::remember(|| compose_ui::ScrollState::new(0.0))
+        .with(|state| state.clone());
+
     Column(
-        Modifier::empty().padding(20.0),
+        Modifier::empty().padding(20.0).vertical_scroll(column_scroll_state.clone(), false),
         ColumnSpec::default(),
         move || {
             let tab_state_for_row = active_tab;
             let tab_state_for_content = active_tab;
             Row(
-                Modifier::empty().fill_max_width().padding(8.0),
+                Modifier::empty()
+                    .fill_max_width()
+                    .padding(8.0)
+                    .horizontal_scroll(tabs_scroll_state.clone(), false),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
                     let render_tab_button = {
@@ -159,7 +173,6 @@ pub fn combined_app() {
                                     let tab_state = tab_state_for_tab;
                                     move || {
                                         if tab_state.get() != tab {
-                                            println!("{} button clicked", tab.label());
                                             tab_state.set(tab);
                                         }
                                     }
@@ -184,6 +197,11 @@ pub fn combined_app() {
                     render_tab_button(DemoTab::Mineswapper2);
                 },
             );
+
+            Spacer(Size {
+                width: 0.0,
+                height: 12.0,
+            });
 
             Spacer(Size {
                 width: 0.0,
@@ -434,7 +452,6 @@ pub fn composition_local_example() {
                 {
                     move || {
                         let new_val = counter.get() + 1;
-                        println!("Incrementing counter to {}", new_val);
                         counter.set(new_val);
                     }
                 },
@@ -504,9 +521,9 @@ fn composition_local_content_inner() {
 
 #[composable]
 fn async_runtime_example() {
-    let is_running = compose_core::useState(|| true);
     let animation = compose_core::useState(AnimationState::default);
     let stats = compose_core::useState(FrameStats::default);
+    let is_running = compose_core::useState(|| true);
     let reset_signal = compose_core::useState(|| 0u64);
 
     {
@@ -839,12 +856,12 @@ fn counter_app() {
     LaunchedEffect!(counter.get(), |_| println!("effect call"));
 
     let is_even = counter.get() % 2 == 0;
-    println!("Recomposing counter_app, counter={}", counter.get());
+
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         compose_core::with_key(&is_even, move || {
-            println!("Compose inside with_key, is_even={}", is_even);
+
             if is_even {
-                println!("Rendering even branch");
+
                 Text(
                     "if counter % 2 == 0",
                     Modifier::empty()
@@ -862,7 +879,7 @@ fn counter_app() {
                         }),
                 );
             } else {
-                println!("Rendering odd branch");
+
                 Text(
                     "if counter % 2 != 0",
                     Modifier::empty()

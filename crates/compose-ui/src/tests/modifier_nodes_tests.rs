@@ -3,7 +3,7 @@ use crate::modifier::{collect_slices_from_modifier, Modifier, PointerInputScope}
 use compose_core::NodeId;
 use compose_foundation::{
     modifier_element, BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton,
-    PointerButtons, PointerEvent, PointerEventKind, PointerPhase,
+    PointerButtons, PointerEvent, PointerEventKind,
 };
 use compose_ui_layout::Placeable;
 use std::cell::{Cell, RefCell};
@@ -215,20 +215,77 @@ fn clickable_node_handles_pointer_events() {
 
     assert!(chain.has_nodes_for_invalidation(compose_foundation::InvalidationKind::PointerInput));
 
-    // Simulate a pointer event
+    // Simulate a pointer Down event - should NOT fire click yet
     let mut node = chain.node_mut::<ClickableNode>(0).unwrap();
-    let event = PointerEvent {
-        id: 0,
-        kind: PointerEventKind::Down,
-        phase: PointerPhase::Start,
-        position: Point { x: 10.0, y: 20.0 },
-        global_position: Point { x: 10.0, y: 20.0 },
-        buttons: PointerButtons::new().with(PointerButton::Primary),
-    };
+    let mut down_event = PointerEvent::new(
+        PointerEventKind::Down,
+        Point { x: 10.0, y: 20.0 },
+        Point { x: 10.0, y: 20.0 },
+    );
+    down_event.buttons = PointerButtons::new().with(PointerButton::Primary);
 
-    let consumed = node.on_pointer_event(&mut context, &event);
-    assert!(consumed);
-    assert!(clicked.get());
+    let consumed = node.on_pointer_event(&mut context, &down_event);
+    assert!(!consumed); // Down should NOT be consumed
+    assert!(!clicked.get()); // Click should NOT fire yet
+
+    // Simulate a pointer Up event - should fire click
+    let mut up_event = PointerEvent::new(
+        PointerEventKind::Up,
+        Point { x: 10.0, y: 20.0 },
+        Point { x: 10.0, y: 20.0 },
+    );
+    up_event.buttons = PointerButtons::new().with(PointerButton::Primary);
+    
+    let consumed = node.on_pointer_event(&mut context, &up_event);
+    assert!(consumed); // Up should be consumed
+    assert!(clicked.get()); // Click should fire on Up
+}
+
+#[test]
+fn clickable_node_cancels_click_on_drag() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+
+    let clicked = Rc::new(Cell::new(false));
+    let clicked_clone = clicked.clone();
+
+    let elements = vec![modifier_element(ClickableElement::new(move |_point| {
+        clicked_clone.set(true);
+    }))];
+    chain.update_from_slice(&elements, &mut context);
+
+    // Simulate a pointer Down event
+    let mut node = chain.node_mut::<ClickableNode>(0).unwrap();
+    let mut down_event = PointerEvent::new(
+        PointerEventKind::Down,
+        Point { x: 10.0, y: 20.0 },
+        Point { x: 10.0, y: 20.0 },
+    );
+    down_event.buttons = PointerButtons::new().with(PointerButton::Primary);
+    node.on_pointer_event(&mut context, &down_event);
+    assert!(!clicked.get());
+
+    // Simulate a Move event that exceeds drag threshold (8px)
+    let mut move_event = PointerEvent::new(
+        PointerEventKind::Move,
+        Point { x: 20.0, y: 20.0 }, // Moved 10px horizontally, beyond 8px threshold
+        Point { x: 20.0, y: 20.0 },
+    );
+    move_event.buttons = PointerButtons::new().with(PointerButton::Primary);
+    node.on_pointer_event(&mut context, &move_event);
+    assert!(!clicked.get()); // Still no click
+
+    // Simulate a pointer Up event - should NOT fire click because we dragged
+    let mut up_event = PointerEvent::new(
+        PointerEventKind::Up,
+        Point { x: 20.0, y: 20.0 },
+        Point { x: 20.0, y: 20.0 },
+    );
+    up_event.buttons = PointerButtons::new().with(PointerButton::Primary);
+
+    let consumed = node.on_pointer_event(&mut context, &up_event);
+    assert!(!consumed); // Up should NOT be consumed (click cancelled)
+    assert!(!clicked.get()); // Click should NOT fire because we dragged
 }
 
 #[test]
@@ -741,6 +798,7 @@ fn custom_layout_modifier_works_via_proxy() {
             constraints: Constraints,
         ) -> compose_ui_layout::LayoutModifierMeasureResult {
             let node = CustomWidthNode::new(self.extra_width);
+
             node.measure(context, wrapped, constraints)
         }
 
@@ -826,6 +884,64 @@ fn custom_layout_modifier_works_via_proxy() {
     // Test intrinsics
     let intrinsic_width = node.min_intrinsic_width(&measurable, 100.0);
     assert_eq!(intrinsic_width, 120.0); // 100 + 20
+}
+
+#[test]
+fn draw_command_updates_on_closure_change() {
+    use crate::draw::DrawCommand;
+    use compose_ui_graphics::{Size, DrawPrimitive};
+
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let executed = Rc::new(Cell::new(0));
+
+    // Element 1: Increments executed by 1
+    let executed_1 = executed.clone();
+    let element_1 = modifier_element(DrawCommandElement::new(DrawCommand::Behind(Rc::new(
+        move |_size: Size| -> Vec<DrawPrimitive> {
+            executed_1.set(executed_1.get() + 1);
+            Vec::new()
+        },
+    ))));
+
+    // Element 2: Increments executed by 10
+    let executed_2 = executed.clone();
+    let element_2 = modifier_element(DrawCommandElement::new(DrawCommand::Behind(Rc::new(
+        move |_size: Size| -> Vec<DrawPrimitive> {
+            executed_2.set(executed_2.get() + 10);
+            Vec::new()
+        },
+    ))));
+
+    // Verify elements are "equal" (PartialEq ignores closures)
+
+
+    // Initial update
+    chain.update_from_slice(&vec![element_1], &mut context);
+    
+    // Execute command from node
+    {
+        let node = chain.node::<DrawCommandNode>(0).unwrap();
+        if let DrawCommand::Behind(ref func) = node.commands()[0] {
+            func(Size::ZERO);
+        }
+    }
+    assert_eq!(executed.get(), 1);
+
+    // Second update with different closure
+    executed.set(0);
+    chain.update_from_slice(&vec![element_2], &mut context);
+
+    // Verify node updated to new closure despite equality
+    let node = chain.node::<DrawCommandNode>(0).unwrap();
+    if let DrawCommand::Behind(ref func) = node.commands()[0] {
+        func(Size::ZERO);
+    }
+    assert_eq!(
+        executed.get(), 
+        10, 
+        "Node should have updated to the new closure"
+    );
 }
 
 /// Test that exposes state fidelity issue: proxies that reconstruct nodes lose state.

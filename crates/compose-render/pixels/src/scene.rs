@@ -1,8 +1,9 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use compose_core::run_in_mutable_snapshot;
-use compose_foundation::{PointerEvent, PointerEventKind, PointerPhase};
+use compose_core::{run_in_mutable_snapshot, NodeId};
+use compose_foundation::{PointerEvent, PointerEventKind};
 use compose_render_common::{HitTestTarget, RenderScene};
 use compose_ui_graphics::{Brush, Color, Rect, RoundedCornerShape};
 
@@ -45,6 +46,7 @@ impl ClickAction {
 
 #[derive(Clone)]
 pub struct HitRegion {
+    pub node_id: NodeId,
     pub rect: Rect,
     pub shape: Option<RoundedCornerShape>,
     pub click_actions: Vec<ClickAction>,
@@ -54,25 +56,22 @@ pub struct HitRegion {
 }
 
 impl HitTestTarget for HitRegion {
-    fn dispatch(&self, kind: PointerEventKind, x: f32, y: f32) {
+    fn dispatch(&self, event: PointerEvent) {
+        // If event is already consumed before we even start, we might want to bail early
+        // BUT for Move events, we still might want to process hover states?
+        // For now, we follow the plan: check consumption inside the loop.
+
+        let x = event.global_position.x;
+        let y = event.global_position.y;
+        let kind = event.kind;
+
         let local = compose_ui_graphics::Point {
             x: x - self.rect.x,
             y: y - self.rect.y,
         };
-        let global = compose_ui_graphics::Point { x, y };
-        let event = PointerEvent {
-            id: 0,
-            kind,
-            phase: match kind {
-                PointerEventKind::Down => PointerPhase::Start,
-                PointerEventKind::Move => PointerPhase::Move,
-                PointerEventKind::Up => PointerPhase::End,
-                PointerEventKind::Cancel => PointerPhase::Cancel,
-            },
-            position: local,
-            global_position: global,
-            buttons: Default::default(),
-        };
+        
+        let local_event = event.copy_with_local_position(local);
+
         let has_pointer_inputs = !self.pointer_inputs.is_empty();
         let has_click_actions = kind == PointerEventKind::Down && !self.click_actions.is_empty();
 
@@ -80,16 +79,17 @@ impl HitTestTarget for HitRegion {
             return;
         }
 
-        eprintln!(
-            "DEBUG: Dispatching {:?} event at ({:.1}, {:.1}) to region with {} pointer_inputs, {} click_actions",
-            kind, x, y, self.pointer_inputs.len(), self.click_actions.len()
-        );
-
         if let Err(err) = run_in_mutable_snapshot(|| {
             for handler in &self.pointer_inputs {
-                handler(event);
+                // If consumed by a previous handler in this loop (or outer loop), stop.
+                if local_event.is_consumed() {
+                    break;
+                }
+                handler(local_event.clone());
             }
-            if kind == PointerEventKind::Down {
+            
+            // Only perform click actions if NOT consumed
+            if kind == PointerEventKind::Down && !local_event.is_consumed() {
                 for action in &self.click_actions {
                     action.invoke(self.rect, x, y);
                 }
@@ -100,6 +100,10 @@ impl HitTestTarget for HitRegion {
                 kind, x, y, err
             );
         }
+    }
+
+    fn node_id(&self) -> NodeId {
+        self.node_id
     }
 }
 
@@ -122,6 +126,8 @@ pub struct Scene {
     pub shapes: Vec<DrawShape>,
     pub texts: Vec<TextDraw>,
     pub hits: Vec<HitRegion>,
+    /// Index for O(1) node lookup by NodeId
+    node_index: HashMap<NodeId, HitRegion>,
     next_z: usize,
 }
 
@@ -131,6 +137,7 @@ impl Scene {
             shapes: Vec::new(),
             texts: Vec::new(),
             hits: Vec::new(),
+            node_index: HashMap::new(),
             next_z: 0,
         }
     }
@@ -175,6 +182,7 @@ impl Scene {
 
     pub fn push_hit(
         &mut self,
+        node_id: NodeId,
         rect: Rect,
         shape: Option<RoundedCornerShape>,
         click_actions: Vec<ClickAction>,
@@ -184,25 +192,20 @@ impl Scene {
         if click_actions.is_empty() && pointer_inputs.is_empty() {
             return;
         }
-        eprintln!(
-            "DEBUG: Creating HitRegion at ({:.1}, {:.1}) {}x{} with {} clicks, {} pointer_inputs",
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            click_actions.len(),
-            pointer_inputs.len()
-        );
         let z_index = self.next_z;
         self.next_z += 1;
-        self.hits.push(HitRegion {
+        let hit_region = HitRegion {
+            node_id,
             rect,
             shape,
             click_actions,
             pointer_inputs,
             z_index,
             hit_clip,
-        });
+        };
+        // Populate both the list and the index for O(1) lookup
+        self.node_index.insert(node_id, hit_region.clone());
+        self.hits.push(hit_region);
     }
 }
 
@@ -219,14 +222,24 @@ impl RenderScene for Scene {
         self.shapes.clear();
         self.texts.clear();
         self.hits.clear();
+        self.node_index.clear();
         self.next_z = 0;
     }
 
-    fn hit_test(&self, x: f32, y: f32) -> Option<Self::HitTarget> {
-        self.hits
+    fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
+        let mut hits: Vec<_> = self.hits
             .iter()
             .filter(|hit| hit.contains(x, y))
-            .max_by(|a, b| a.z_index.cmp(&b.z_index))
             .cloned()
+            .collect();
+        
+        // Sort by z-index descending (top to bottom)
+        hits.sort_by(|a, b| b.z_index.cmp(&a.z_index));
+        hits
+    }
+
+    fn find_target(&self, node_id: NodeId) -> Option<Self::HitTarget> {
+        // O(1) lookup using the node index
+        self.node_index.get(&node_id).cloned()
     }
 }

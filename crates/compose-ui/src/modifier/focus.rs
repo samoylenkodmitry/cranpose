@@ -166,27 +166,17 @@ impl std::fmt::Debug for FocusTargetElement {
 
 impl PartialEq for FocusTargetElement {
     fn eq(&self, other: &Self) -> bool {
-        // Compare callback pointers if both present
-        match (&self.on_focus_changed, &other.on_focus_changed) {
-            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        }
+        // Type-based matching: compare only presence of callback, not pointer
+        // Nodes are updated via update() method, preserving behavior
+        self.on_focus_changed.is_some() == other.on_focus_changed.is_some()
     }
 }
 
 impl Hash for FocusTargetElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash the address of the callback Rc if present
-        match &self.on_focus_changed {
-            Some(rc) => {
-                let ptr = Rc::as_ptr(rc);
-                (ptr as *const ()).hash(state);
-            }
-            None => {
-                0usize.hash(state);
-            }
-        }
+        // Consistent hash based on callback presence only
+        "focus_target".hash(state);
+        self.on_focus_changed.is_some().hash(state);
     }
 }
 
@@ -214,6 +204,11 @@ impl ModifierNodeElement for FocusTargetElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::FOCUS
+    }
+
+    fn always_update(&self) -> bool {
+        // Always update to capture new closure if it changed
+        true
     }
 }
 

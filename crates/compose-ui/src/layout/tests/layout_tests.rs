@@ -1,11 +1,21 @@
 use super::*;
 use crate::layout::policies::LeafMeasurePolicy;
 use crate::modifier::{Modifier, Size};
-use compose_core::{Applier, ConcreteApplierHost, MemoryApplier};
+use compose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
 use compose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
 use std::{cell::RefCell, rc::Rc};
 
+
 use super::core::Measurable;
+
+fn measure_layout(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+    max_size: Size,
+) -> Result<LayoutMeasurements, NodeError> {
+    let measurements = super::measure_layout(applier, root, max_size)?;
+    Ok(measurements)
+}
 
 #[derive(Clone, Copy)]
 struct VerticalStackPolicy;
@@ -907,7 +917,7 @@ fn flex_parent_data_uses_resolved_weight() {
 
 #[test]
 fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
-    use crate::layout::{measure_layout, SemanticsRole};
+    use crate::layout::SemanticsRole;
 
     let mut applier = MemoryApplier::new();
 
@@ -945,8 +955,6 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
 #[test]
 fn semantics_configuration_merges_multiple_modifiers() -> Result<(), NodeError> {
-    use crate::layout::measure_layout;
-
     let mut applier = MemoryApplier::new();
 
     // Chain multiple semantics modifiers
@@ -988,7 +996,7 @@ fn semantics_only_updates_do_not_trigger_layout() -> Result<(), NodeError> {
     let node_id = applier.create(Box::new(node));
 
     // Do initial measure
-    let _ = crate::layout::measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
+    let _ = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
 
     // Node should be clean after measure
     assert!(!applier.with_node::<LayoutNode, _>(node_id, |n| n.needs_layout())?);
@@ -1011,3 +1019,190 @@ fn semantics_only_updates_do_not_trigger_layout() -> Result<(), NodeError> {
 
     Ok(())
 }
+
+// ============================================================================
+// APPLIER/SLOT GUARD PANIC RECOVERY TESTS
+// ============================================================================
+
+/// A measure policy that panics when invoked.
+#[derive(Clone)]
+struct PanickingMeasurePolicy;
+
+impl MeasurePolicy for PanickingMeasurePolicy {
+    fn measure(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        _constraints: Constraints,
+    ) -> MeasureResult {
+        panic!("Deliberate panic in MeasurePolicy::measure")
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+}
+
+#[test]
+fn measure_layout_panic_preserves_applier_and_slots() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let mut applier = MemoryApplier::new();
+
+    // Create a normal node first to populate the applier
+    let normal_node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
+    let normal_id = applier.create(Box::new(normal_node));
+
+    // Verify the applier has the node
+    assert!(
+        applier.get_mut(normal_id).is_ok(),
+        "Applier should contain normal node before panic test"
+    );
+
+    // Count nodes before panic
+    let node_count_before = applier.len();
+    assert!(node_count_before > 0, "Should have at least one node");
+
+    // Create the panicking node
+    let panicking_node = LayoutNode::new(Modifier::empty(), Rc::new(PanickingMeasurePolicy));
+    let panic_id = applier.create(Box::new(panicking_node));
+
+    // Attempt to measure the panicking node - this should panic but the RAII guard
+    // should restore the applier
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let _ = measure_layout(
+            &mut applier,
+            panic_id,
+            Size {
+                width: 100.0,
+                height: 100.0,
+            },
+        );
+    }));
+
+    // The panic should have been caught
+    assert!(result.is_err(), "measure_layout should have panicked");
+
+    // CRITICAL: The applier should still be intact and usable
+    // This is what ApplierSlotGuard protects - without it, the applier would be
+    // left in an invalid state (replaced with an empty MemoryApplier::new())
+
+    // Check that we can still access the original node
+    assert!(
+        applier.get_mut(normal_id).is_ok(),
+        "Applier should still contain original node after panic - ApplierSlotGuard worked!"
+    );
+
+    // Check the node count is preserved
+    let node_count_after = applier.len();
+    assert_eq!(
+        node_count_before + 1, // +1 because we added the panicking node
+        node_count_after,
+        "All nodes should be preserved after panic"
+    );
+
+    // Verify we can still perform layout on the normal node
+    let result = measure_layout(
+        &mut applier,
+        normal_id,
+        Size {
+            width: 100.0,
+            height: 100.0,
+        },
+    );
+    assert!(
+        result.is_ok(),
+        "Should be able to do layout after recovering from panic"
+    );
+}
+
+#[test]
+fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
+    let mut applier = MemoryApplier::new();
+
+    // Create a valid tree with multiple nodes
+    let child1 = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 20.0,
+            height: 20.0,
+        })),
+    )));
+    let child2 = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 30.0,
+            height: 30.0,
+        })),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.insert(child1);
+    root.children.insert(child2);
+    let root_id = applier.create(Box::new(root));
+
+    // Perform a successful layout first
+    let result = measure_layout(
+        &mut applier,
+        root_id,
+        Size {
+            width: 100.0,
+            height: 100.0,
+        },
+    )?;
+    assert_eq!(
+        result.root_size().height,
+        50.0,
+        "Initial layout should succeed"
+    );
+
+    // Now try to measure a non-existent node (will return an error)
+    // Use a large ID that definitely doesn't exist (we only created 3 nodes: 0, 1, 2)
+    let fake_id: NodeId = 99999;
+    let error_result = measure_layout(
+        &mut applier,
+        fake_id,
+        Size {
+            width: 100.0,
+            height: 100.0,
+        },
+    );
+    assert!(
+        error_result.is_err(),
+        "Measuring non-existent node should error"
+    );
+
+    // CRITICAL: After the error, we should still be able to use the applier
+    // The ApplierSlotGuard ensures the applier is restored even on Err paths
+
+    // Verify all original nodes are still accessible
+    assert!(applier.get_mut(root_id).is_ok(), "Root should still exist");
+    assert!(applier.get_mut(child1).is_ok(), "Child1 should still exist");
+    assert!(applier.get_mut(child2).is_ok(), "Child2 should still exist");
+
+    // Verify we can still perform successful layout
+    let result_after = measure_layout(
+        &mut applier,
+        root_id,
+        Size {
+            width: 100.0,
+            height: 100.0,
+        },
+    )?;
+    assert_eq!(
+        result_after.root_size().height,
+        50.0,
+        "Layout should still work after error recovery"
+    );
+
+    Ok(())
+}
+

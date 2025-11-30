@@ -3,6 +3,10 @@
 //! Coordinators wrap modifier nodes and form a chain that drives measurement, placement,
 //! drawing, and hit testing. Each LayoutModifierNode gets its own coordinator instance
 //! that persists across recomposition, enabling proper state and invalidation tracking.
+//!
+//! **Content Offset Tracking**: Each coordinator contributes its placement offset to a
+//! shared accumulator during measurement. The final `content_offset()` is read from this
+//! accumulator via the outermost CoordinatorPlaceable.
 
 use compose_core::NodeId;
 use compose_foundation::ModifierNodeContext;
@@ -15,9 +19,15 @@ use crate::modifier::{Point, Size};
 
 /// Core coordinator trait that all coordinators implement.
 ///
-/// Coordinators are chained together, with each one wrapping the next inner coordinator.
-/// This forms a measurement and placement chain that mirrors the modifier chain.
-pub trait NodeCoordinator: Measurable {}
+/// Coordinators are chained together, with each one wrapping the next.
+/// Coordinators wrap either other coordinators or the inner coordinator.
+pub trait NodeCoordinator: Measurable {
+    /// Returns the accumulated placement offset from this coordinator
+    /// down through the wrapped chain (inner-most coordinator).
+    fn total_content_offset(&self) -> Point;
+}
+
+
 
 /// Coordinator that wraps a single LayoutModifierNode from the reconciled chain.
 ///
@@ -32,9 +42,9 @@ pub struct LayoutModifierCoordinator<'a> {
     wrapped: Box<dyn NodeCoordinator + 'a>,
     /// The measured size from the last measure pass.
     measured_size: Cell<Size>,
-    /// The placement offset from the last measure pass.
-    /// This tells us where to place the wrapped content relative to this coordinator's position.
-    placement_offset: Cell<Point>,
+    /// The ACCUMULATED placement offset from this coordinator through the entire chain.
+    /// This is local_offset + wrapped.total_content_offset(), stored for O(1) access.
+    accumulated_offset: Cell<Point>,
     /// Shared context for invalidation tracking.
     context: Rc<RefCell<LayoutNodeContext>>,
 }
@@ -50,26 +60,32 @@ impl<'a> LayoutModifierCoordinator<'a> {
         Self {
             node,
             wrapped,
-            measured_size: Cell::new(Size::ZERO),
-            placement_offset: Cell::new(Point::default()),
+            measured_size: Cell::new(Size::default()),
+            accumulated_offset: Cell::new(Point::default()),
             context,
         }
     }
 }
 
-impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {}
+impl<'a> NodeCoordinator for LayoutModifierCoordinator<'a> {
+    fn total_content_offset(&self) -> Point {
+        // O(1): just return the pre-computed accumulated offset
+        self.accumulated_offset.get()
+    }
+}
+
+
 
 impl<'a> Measurable for LayoutModifierCoordinator<'a> {
+    /// Measure through this coordinator
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
-        // Call the node's measure method directly using the Rc<RefCell<>> we hold.
-        // This achieves true 1:1 parity with Jetpack Compose where coordinators
-        // hold direct references to nodes and call them without proxies.
+        let node_borrow = self.node.borrow();
+        
         let result = {
-            let node_borrow = self.node.borrow();
             if let Some(layout_node) = node_borrow.as_layout_node() {
                 match self.context.try_borrow_mut() {
-                    Ok(mut ctx) => {
-                        layout_node.measure(&mut *ctx, self.wrapped.as_ref(), constraints)
+                    Ok(mut context) => {
+                        layout_node.measure(&mut *context, self.wrapped.as_ref(), constraints)
                     }
                     Err(_) => {
                         // Context already borrowed - use a temporary context
@@ -90,21 +106,42 @@ impl<'a> Measurable for LayoutModifierCoordinator<'a> {
             } else {
                 // Node is not a layout modifier - pass through to wrapped coordinator
                 let placeable = self.wrapped.measure(constraints);
-                compose_ui_layout::LayoutModifierMeasureResult::with_size(Size {
-                    width: placeable.width(),
-                    height: placeable.height(),
-                })
+                // Pass through the child's accumulated offset (stored from its measure())
+                let child_accumulated = self.wrapped.total_content_offset();
+                self.accumulated_offset.set(child_accumulated);
+                return Box::new(CoordinatorPlaceable {
+                    size: Size { width: placeable.width(), height: placeable.height() },
+                    content_offset: child_accumulated,
+                });
             }
         };
 
-        // Store both the size and the placement offset for use during placement
+        // Store size
         self.measured_size.set(result.size);
-        self.placement_offset.set(Point {
+        
+        // Compute local offset from this coordinator
+        let local_offset = Point {
             x: result.placement_offset_x,
             y: result.placement_offset_y,
-        });
-        Box::new(CoordinatorPlaceable { size: result.size })
+        };
+        
+        // Get wrapped's accumulated offset (O(1) - just reads its stored value)
+        // Note: wrapped.measure() was called by layout_node.measure(), so its offset is already set
+        let child_accumulated = self.wrapped.total_content_offset();
+        
+        // Store OUR accumulated offset (local + child)
+        let accumulated = Point {
+            x: local_offset.x + child_accumulated.x,
+            y: local_offset.y + child_accumulated.y,
+        };
+        self.accumulated_offset.set(accumulated);
+
+        Box::new(CoordinatorPlaceable {
+            size: result.size,
+            content_offset: accumulated,
+        })
     }
+
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
         let node_borrow = self.node.borrow();
@@ -174,7 +211,11 @@ impl<'a> InnerCoordinator<'a> {
     }
 }
 
-impl<'a> NodeCoordinator for InnerCoordinator<'a> {}
+impl<'a> NodeCoordinator for InnerCoordinator<'a> {
+    fn total_content_offset(&self) -> Point {
+        Point::default()
+    }
+}
 
 impl<'a> Measurable for InnerCoordinator<'a> {
     fn measure(&self, constraints: Constraints) -> Box<dyn Placeable> {
@@ -188,7 +229,11 @@ impl<'a> Measurable for InnerCoordinator<'a> {
         // Store the result in the shared holder for placement extraction
         *self.result_holder.borrow_mut() = Some(result);
 
-        Box::new(CoordinatorPlaceable { size })
+        // InnerCoordinator has no offset contribution
+        Box::new(CoordinatorPlaceable {
+            size,
+            content_offset: Point::default(),
+        })
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
@@ -213,8 +258,11 @@ impl<'a> Measurable for InnerCoordinator<'a> {
 }
 
 /// Placeable implementation for coordinators.
+/// Carries the accumulated content offset from the coordinator chain.
 struct CoordinatorPlaceable {
     size: Size,
+    /// Accumulated content offset (sum of all offsets from this coordinator down).
+    content_offset: Point,
 }
 
 impl Placeable for CoordinatorPlaceable {
@@ -227,10 +275,14 @@ impl Placeable for CoordinatorPlaceable {
     }
 
     fn place(&self, _x: f32, _y: f32) {
-        // Placement is handled by the coordinator
+        // Placement is handled externally by the layout system
     }
 
     fn node_id(&self) -> NodeId {
         NodeId::default()
+    }
+
+    fn content_offset(&self) -> (f32, f32) {
+        (self.content_offset.x, self.content_offset.y)
     }
 }

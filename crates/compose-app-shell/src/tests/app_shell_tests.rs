@@ -5,11 +5,15 @@ use compose_core::{
 use compose_macros::composable;
 use compose_ui::{Column, ColumnSpec, Modifier, Row, RowSpec, Text};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct TestHitTarget;
 
 impl HitTestTarget for TestHitTarget {
-    fn dispatch(&self, _kind: PointerEventKind, _x: f32, _y: f32) {}
+    fn dispatch(&self, _event: PointerEvent) {}
+
+    fn node_id(&self) -> compose_core::NodeId {
+        0
+    }
 }
 
 #[derive(Default)]
@@ -20,7 +24,11 @@ impl RenderScene for TestScene {
 
     fn clear(&mut self) {}
 
-    fn hit_test(&self, _x: f32, _y: f32) -> Option<Self::HitTarget> {
+    fn hit_test(&self, _x: f32, _y: f32) -> Vec<Self::HitTarget> {
+        vec![]
+    }
+
+    fn find_target(&self, _node_id: compose_core::NodeId) -> Option<Self::HitTarget> {
         None
     }
 }

@@ -196,10 +196,15 @@ impl LayoutNode {
     }
 
     pub fn set_modifier(&mut self, modifier: Modifier) {
-        // Only mark dirty if modifier actually changed
-        if self.modifier != modifier {
-            self.modifier = modifier;
-            self.sync_modifier_chain();
+        // Always sync the modifier chain because element equality is used for node
+        // matching/reuse, not for skipping updates. Closures may capture updated
+        // state values that need to be passed to nodes even when the Modifier
+        // compares as equal. This matches Jetpack Compose where update() is always
+        // called on matched nodes.
+        let modifier_changed = self.modifier != modifier;
+        self.modifier = modifier;
+        self.sync_modifier_chain();
+        if modifier_changed {
             self.cache.clear();
             self.mark_needs_measure();
             self.request_semantics_update();
@@ -213,6 +218,7 @@ impl LayoutNode {
         };
         self.modifier_chain
             .set_debug_logging(self.debug_modifiers.get());
+        self.modifier_chain.set_node_id(self.id.get());
         let modifier_local_invalidations = self
             .modifier_chain
             .update_with_resolver(&self.modifier, &mut resolver);
@@ -224,6 +230,7 @@ impl LayoutNode {
         self.dispatch_modifier_invalidations(&invalidations);
         self.refresh_registry_state();
     }
+    
 
     fn dispatch_modifier_invalidations(&self, invalidations: &[ModifierInvalidation]) {
         for invalidation in invalidations {
@@ -375,12 +382,16 @@ impl LayoutNode {
     }
 
     /// Set this node's ID (called by applier after creation).
-    pub fn set_node_id(&self, id: NodeId) {
+    pub fn set_node_id(&mut self, id: NodeId) {
         if let Some(existing) = self.id.replace(Some(id)) {
             unregister_layout_node(existing);
         }
         register_layout_node(id, self);
         self.refresh_registry_state();
+
+        // Propagate the ID to the modifier chain. This triggers a lifecycle update
+        // for nodes that depend on the node ID for invalidation (e.g., ScrollNode).
+        self.modifier_chain.set_node_id(Some(id));
     }
 
     /// Get this node's ID.
@@ -513,7 +524,8 @@ impl Clone for LayoutNode {
 
 impl Node for LayoutNode {
     fn set_node_id(&mut self, id: NodeId) {
-        self.id.set(Some(id));
+        // Delegate to inherent method to ensure proper registration and chain updates
+        LayoutNode::set_node_id(self, id);
     }
 
     fn insert_child(&mut self, child: NodeId) {

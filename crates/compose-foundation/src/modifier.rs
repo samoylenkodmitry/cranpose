@@ -20,7 +20,9 @@ pub use compose_ui_graphics::DrawScope;
 pub use compose_ui_graphics::Size;
 pub use compose_ui_layout::{Constraints, Measurable};
 
+
 use crate::nodes::input::types::PointerEvent;
+// use compose_core::NodeId;
 
 /// Identifies which part of the rendering pipeline should be invalidated
 /// after a modifier node changes state.
@@ -42,6 +44,12 @@ pub trait ModifierNodeContext {
     /// regular composition pass.
     fn request_update(&mut self) {}
 
+    /// Returns the ID of the layout node this modifier is attached to, if known.
+    /// This is used by modifiers that need to register callbacks for invalidation (e.g. Scroll).
+    fn node_id(&self) -> Option<compose_core::NodeId> {
+        None
+    }
+
     /// Signals that a node with `capabilities` is about to interact with this context.
     fn push_active_capabilities(&mut self, _capabilities: NodeCapabilities) {}
 
@@ -62,6 +70,7 @@ pub struct BasicModifierNodeContext {
     invalidations: Vec<ModifierInvalidation>,
     update_requested: bool,
     active_capabilities: Vec<NodeCapabilities>,
+    node_id: Option<compose_core::NodeId>,
 }
 
 impl BasicModifierNodeContext {
@@ -96,6 +105,11 @@ impl BasicModifierNodeContext {
     /// Returns whether an update was requested and clears the flag.
     pub fn take_update_requested(&mut self) -> bool {
         std::mem::take(&mut self.update_requested)
+    }
+
+    /// Sets the node ID associated with this context.
+    pub fn set_node_id(&mut self, id: Option<compose_core::NodeId>) {
+        self.node_id = id;
     }
 
     fn push_invalidation(&mut self, kind: InvalidationKind) {
@@ -137,6 +151,10 @@ impl ModifierNodeContext for BasicModifierNodeContext {
 
     fn pop_active_capabilities(&mut self) {
         self.active_capabilities.pop();
+    }
+
+    fn node_id(&self) -> Option<compose_core::NodeId> {
+        self.node_id
     }
 }
 
@@ -656,6 +674,15 @@ pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + 'static {
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::default()
     }
+
+    /// Whether this element requires `update` to be called even if `eq` returns true.
+    ///
+    /// This is useful for elements that ignore certain fields in `eq` (e.g. closures)
+    /// to allow node reuse, but still need those fields updated in the existing node.
+    /// Defaults to `false`.
+    fn always_update(&self) -> bool {
+        false
+    }
 }
 
 /// Transitional alias so existing call sites that refer to `ModifierElement`
@@ -807,6 +834,8 @@ pub trait AnyModifierElement: fmt::Debug {
 
     fn record_inspector_properties(&self, visitor: &mut dyn FnMut(&'static str, String));
 
+    fn requires_update(&self) -> bool;
+
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -883,6 +912,10 @@ where
 
     fn record_inspector_properties(&self, visitor: &mut dyn FnMut(&'static str, String)) {
         self.element.inspector_properties(visitor);
+    }
+
+    fn requires_update(&self) -> bool {
+        self.element.always_update()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1211,6 +1244,26 @@ impl ModifierNodeChain {
         chain
     }
 
+    /// Detaches all nodes in the chain.
+    pub fn detach_nodes(&mut self) {
+        for entry in &self.entries {
+            detach_node_tree(&mut **entry.node.borrow_mut());
+        }
+    }
+
+    /// Attaches all nodes in the chain.
+    pub fn attach_nodes(&mut self, context: &mut dyn ModifierNodeContext) {
+        for entry in &self.entries {
+            attach_node_tree(&mut **entry.node.borrow_mut(), context);
+        }
+    }
+
+    /// Rebuilds the internal chain links (parent/child relationships).
+    /// This should be called if nodes have been detached but are intended to be reused.
+    pub fn repair_chain(&mut self) {
+        self.sync_chain_links();
+    }
+
     /// Reconcile the chain against the provided elements, attaching newly
     /// created nodes and detaching nodes that are no longer required.
     ///
@@ -1270,8 +1323,10 @@ impl ModifierNodeChain {
                     }
                 }
 
-                // Only update node if element changed
-                if !same_element {
+                // Optimize updates: only call update_node if element changed OR
+                // if the element type explicitly requests forced updates (e.g. for closures).
+                // This restores performance for stable modifiers like Padding/Background.
+                if !same_element || element.requires_update() {
                     element.update_node(&mut **entry.node.borrow_mut());
                     entry.element = element.clone();
                     entry.hash_code = hash_code;
