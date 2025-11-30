@@ -12,7 +12,9 @@ use glyphon::{
 use std::sync::{Arc, Mutex};
 
 // Chunked rendering constants for robustness with large scenes
-const MAX_SHAPES_PER_DRAW: usize = 16384; // 16k shapes per draw call
+// Note: Limited to 256 for WebGL compatibility (uniform buffer size limit)
+// WebGL guarantees 16KB uniform buffers, ShapeData is 64 bytes = 256 max shapes
+const MAX_SHAPES_PER_DRAW: usize = 256;
 const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer
 
 #[repr(C)]
@@ -79,10 +81,15 @@ struct ShapeBatchBuffers {
 
 impl ShapeBatchBuffers {
     fn new(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
-        let initial_vertex_cap = 64; // 16 shapes * 4 vertices
-        let initial_index_cap = 96; // 16 shapes * 6 indices
-        let initial_shape_cap = 16;
-        let initial_gradient_cap = 16;
+        // For WebGL uniform buffers, size MUST match shader declaration (256 shapes)
+        // Shader declares: var<uniform> shape_data: array<ShapeData, 256>
+        const WEBGL_UNIFORM_SHAPE_COUNT: usize = 256;
+        const WEBGL_UNIFORM_GRADIENT_COUNT: usize = 256;
+
+        let initial_vertex_cap = WEBGL_UNIFORM_SHAPE_COUNT * 4; // 4 vertices per shape
+        let initial_index_cap = WEBGL_UNIFORM_SHAPE_COUNT * 6;  // 6 indices per shape
+        let initial_shape_cap = WEBGL_UNIFORM_SHAPE_COUNT;
+        let initial_gradient_cap = WEBGL_UNIFORM_GRADIENT_COUNT;
 
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shape Vertex Buffer"),
@@ -98,17 +105,18 @@ impl ShapeBatchBuffers {
             mapped_at_creation: false,
         });
 
+        // Use UNIFORM for WebGL compatibility (storage buffers not supported)
         let shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shape Data Buffer"),
             size: (std::mem::size_of::<ShapeData>() * initial_shape_cap) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Gradient Buffer"),
             size: (std::mem::size_of::<GradientStop>() * initial_gradient_cap) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -187,7 +195,7 @@ impl ShapeBatchBuffers {
             self.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Shape Data Buffer"),
                 size: (std::mem::size_of::<ShapeData>() * new_cap) as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             self.shape_capacity = new_cap;
@@ -201,7 +209,7 @@ impl ShapeBatchBuffers {
             self.gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Gradient Buffer"),
                 size: (std::mem::size_of::<GradientStop>() * new_cap) as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             self.gradient_capacity = new_cap;
@@ -276,6 +284,8 @@ impl GpuRenderer {
                 }],
             });
 
+        // Use uniform buffers for WebGL compatibility
+        // Storage buffers aren't supported in WebGL fragment shaders
         let shape_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Shape Bind Group Layout"),
@@ -284,7 +294,7 @@ impl GpuRenderer {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -294,7 +304,7 @@ impl GpuRenderer {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -401,6 +411,8 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
+        log::info!("🎨 Rendering: {} shapes, {} texts (size: {}x{})", shapes.len(), texts.len(), width, height);
+
         // Sort by z-index
         let mut sorted_shapes = shapes.to_vec();
         sorted_shapes.sort_by_key(|s| s.z_index);
