@@ -6,9 +6,12 @@ license = "Apache-2.0"
 description = "Testing utilities and harness for Compose-RS"
 
 [dependencies]
+compose-app-shell = { version = "0.1.0", path = "../compose-app-shell" }
 compose-core = { path = "../compose-core" }
 compose-foundation = { path = "../compose-foundation" }
+compose-render-pixels = { version = "0.1.0", path = "../compose-render/pixels" }
 compose-ui = { path = "../compose-ui" }
+compose-ui-graphics = { version = "0.1.0", path = "../compose-ui-graphics" }
 
 [dev-dependencies]
 compose-macros = { path = "../compose-macros" }

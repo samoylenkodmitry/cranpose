@@ -561,10 +561,13 @@ dependencies = [
 name = "compose-testing"
 version = "0.1.0"
 dependencies = [
+ "compose-app-shell",
  "compose-core",
  "compose-foundation",
  "compose-macros",
+ "compose-render-pixels",
  "compose-ui",
+ "compose-ui-graphics",
 ]
 
 [[package]]
