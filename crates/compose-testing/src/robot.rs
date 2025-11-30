@@ -101,11 +101,51 @@ pub struct SceneSnapshot {
 }
 
 impl SceneSnapshot {
-    fn from_scene(scene: &compose_render_pixels::Scene) -> Self {
+    pub(crate) fn from_scene(scene: &compose_render_pixels::Scene) -> Self {
         Self {
             texts: scene.texts.clone(),
             shapes: scene.shapes.clone(),
             hits: scene.hits.clone(),
+        }
+    }
+
+    pub(crate) fn from_wgpu_scene(scene: &compose_render_wgpu::Scene) -> Self {
+        Self {
+            texts: scene
+                .texts
+                .iter()
+                .map(|text| TextDraw {
+                    rect: text.rect,
+                    text: text.text.clone(),
+                    color: text.color,
+                    scale: text.scale,
+                    z_index: text.z_index,
+                    clip: text.clip,
+                })
+                .collect(),
+            shapes: scene
+                .shapes
+                .iter()
+                .map(|shape| DrawShape {
+                    rect: shape.rect,
+                    brush: shape.brush.clone(),
+                    shape: shape.shape,
+                    z_index: shape.z_index,
+                    clip: shape.clip,
+                })
+                .collect(),
+            hits: scene
+                .hits
+                .iter()
+                .map(|hit| HitRegion {
+                    rect: hit.rect,
+                    shape: hit.shape,
+                    click_actions: Vec::new(),
+                    pointer_inputs: Vec::new(),
+                    z_index: hit.z_index,
+                    hit_clip: hit.hit_clip,
+                })
+                .collect(),
         }
     }
 

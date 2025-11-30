@@ -566,8 +566,12 @@ dependencies = [
  "compose-foundation",
  "compose-macros",
  "compose-render-pixels",
+ "compose-render-wgpu",
  "compose-ui",
  "compose-ui-graphics",
+ "pollster",
+ "thiserror 1.0.69",
+ "wgpu",
 ]
 
 [[package]]
@@ -2083,7 +2087,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
