@@ -55,7 +55,13 @@ fn main() {
             for (name, x, y) in tabs {
                 println!("Switching to '{}' tab...", name);
                 robot.click(x, y).expect("Failed to click tab");
-                robot.wait_for_idle().expect("Failed to wait");
+                
+                // Wait for idle - animations are a valid app state, so timeout is not a failure
+                match robot.wait_for_idle() {
+                    Ok(_) => println!("{} tab ready (idle achieved)", name),
+                    Err(e) => println!("{} tab switched ({})", name, e),
+                }
+                
                 std::thread::sleep(Duration::from_millis(800));
             }
 

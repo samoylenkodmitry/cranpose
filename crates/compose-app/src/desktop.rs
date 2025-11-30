@@ -412,6 +412,16 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
                             app.update();
                             controller.idle_iterations += 1;
 
+                            // Periodic diagnostic logging
+                            if controller.idle_iterations % 50 == 0 {
+                                log::debug!(
+                                    "wait_for_idle iteration {}: needs_redraw={}, has_animations={}",
+                                    controller.idle_iterations,
+                                    app.needs_redraw(),
+                                    app.has_active_animations()
+                                );
+                            }
+
                             if controller.idle_iterations >= MAX_IDLE_ITERATIONS {
                                 controller.waiting_for_idle = false;
                                 let _ = controller.tx.send(RobotResponse::Error(
