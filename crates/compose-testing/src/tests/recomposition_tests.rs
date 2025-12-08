@@ -2,21 +2,46 @@ use super::*;
 use compose_macros::composable;
 
 #[derive(Default)]
-struct TestContainerNode;
+struct TestContainerNode {
+    parent: Option<NodeId>,
+}
 
-impl Node for TestContainerNode {}
+impl Node for TestContainerNode {
+    fn on_attached_to_parent(&mut self, parent: NodeId) {
+        self.parent = Some(parent);
+    }
+    fn on_removed_from_parent(&mut self) {
+        self.parent = None;
+    }
+    fn parent(&self) -> Option<NodeId> {
+        self.parent
+    }
+}
 
 #[derive(Default)]
 struct TestTextNode {
     content: String,
+    parent: Option<NodeId>,
 }
 
-impl Node for TestTextNode {}
+impl Node for TestTextNode {
+    fn on_attached_to_parent(&mut self, parent: NodeId) {
+        self.parent = Some(parent);
+    }
+    fn on_removed_from_parent(&mut self) {
+        self.parent = None;
+    }
+    fn parent(&self) -> Option<NodeId> {
+        self.parent
+    }
+}
 
 #[allow(non_snake_case)]
 #[composable]
 fn Column(content: impl FnOnce()) {
-    let id = with_current_composer(|composer| composer.emit_node(|| TestContainerNode));
+    let id = with_current_composer(|composer| {
+        composer.emit_node(|| TestContainerNode { parent: None })
+    });
     push_parent(id);
     content();
     pop_parent();
@@ -29,6 +54,7 @@ fn Text(value: String) {
     let id = with_current_composer(|composer| {
         composer.emit_node(|| TestTextNode {
             content: initial_content,
+            parent: None,
         })
     });
     with_node_mut(id, |node: &mut TestTextNode| {

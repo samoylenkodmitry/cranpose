@@ -308,7 +308,9 @@ fn element_equality_controls_node_reuse() {
         first_ptr, reused_ptr,
         "nodes should be reused when elements are equal"
     );
-    assert_eq!(updates.get(), 0, "equal elements skip update invocations");
+    // update() is skipped for matched nodes when element is equal and always_update is false.
+    // This is the optimization we wanted to restore.
+    assert_eq!(updates.get(), 0, "update is skipped for equal elements");
 
     let different = vec![modifier_element(EqualityElement {
         value: 2,
@@ -326,7 +328,7 @@ fn element_equality_controls_node_reuse() {
     assert_eq!(
         updates.get(),
         1,
-        "value changes trigger a single update call"
+        "second update also triggers an update call"
     );
     assert_eq!(chain.node::<EqualityNode>(0).unwrap().value, 2);
 }
@@ -362,10 +364,12 @@ fn equality_matching_prefers_identical_elements_over_type_matches() {
     ];
     chain.update_from_slice(&reordered, &mut context);
 
+    // update() is skipped for usage of element with value 2 (exact match),
+    // but called for usage of element with value 3 (type match only).
     assert_eq!(
         updates.get(),
         1,
-        "only the node whose element changed should be updated"
+        "update is called only when elements differ"
     );
     assert_eq!(chain.node::<EqualityNode>(0).unwrap().value, 2);
     assert_eq!(chain.node::<EqualityNode>(1).unwrap().value, 3);

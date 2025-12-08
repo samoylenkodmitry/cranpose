@@ -68,8 +68,11 @@ impl fmt::Debug for SemanticsElement {
 }
 
 impl PartialEq for SemanticsElement {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.recorder, &other.recorder)
+    fn eq(&self, _other: &Self) -> bool {
+        // Type matching is sufficient - node will be updated via update() method
+        // This matches JC behavior where nodes are reused for same-type elements,
+        // preventing unnecessary modifier chain recreation
+        true
     }
 }
 
@@ -77,7 +80,8 @@ impl Eq for SemanticsElement {}
 
 impl Hash for SemanticsElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        Rc::as_ptr(&self.recorder).hash(state);
+        // Consistent hash for type-based matching
+        "semantics".hash(state);
     }
 }
 
@@ -94,6 +98,11 @@ impl ModifierNodeElement for SemanticsElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::SEMANTICS
+    }
+
+    fn always_update(&self) -> bool {
+        // Recorder closure might change
+        true
     }
 }
 

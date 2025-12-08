@@ -333,7 +333,9 @@ impl fmt::Debug for ModifierLocalProviderElement {
 
 impl PartialEq for ModifierLocalProviderElement {
     fn eq(&self, other: &Self) -> bool {
-        self.token == other.token && Rc::ptr_eq(&self.factory, &other.factory)
+        // Type-based matching: compare only tokens, not factory closures
+        // Nodes are updated via update() method, preserving behavior
+        self.token == other.token
     }
 }
 
@@ -341,8 +343,9 @@ impl Eq for ModifierLocalProviderElement {}
 
 impl Hash for ModifierLocalProviderElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        // Consistent hash based on token only
+        "modifier_local_provider".hash(state);
         self.token.hash(state);
-        Rc::as_ptr(&self.factory).hash(state);
     }
 }
 
@@ -359,6 +362,11 @@ impl ModifierNodeElement for ModifierLocalProviderElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::MODIFIER_LOCALS
+    }
+
+    fn always_update(&self) -> bool {
+        // Factory closure might change even if token is same
+        true
     }
 }
 
@@ -385,8 +393,10 @@ impl fmt::Debug for ModifierLocalConsumerElement {
 }
 
 impl PartialEq for ModifierLocalConsumerElement {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.callback, &other.callback)
+    fn eq(&self, _other: &Self) -> bool {
+        // Type-based matching: always equal for same type
+        // Nodes are updated via update() method, preserving behavior
+        true
     }
 }
 
@@ -394,7 +404,8 @@ impl Eq for ModifierLocalConsumerElement {}
 
 impl Hash for ModifierLocalConsumerElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        Rc::as_ptr(&self.callback).hash(state);
+        // Consistent hash for type-based matching
+        "modifier_local_consumer".hash(state);
     }
 }
 
@@ -411,6 +422,11 @@ impl ModifierNodeElement for ModifierLocalConsumerElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::MODIFIER_LOCALS
+    }
+
+    fn always_update(&self) -> bool {
+        // Callback closure might change
+        true
     }
 }
 

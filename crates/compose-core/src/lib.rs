@@ -1013,6 +1013,7 @@ pub(crate) type Command = Box<dyn FnMut(&mut dyn Applier) -> Result<(), NodeErro
 pub struct MemoryApplier {
     nodes: Vec<Option<Box<dyn Node>>>, // FUTURE(no_std): migrate to arena-backed node storage.
     layout_runtime: Option<RuntimeHandle>,
+    slots: SlotBackend,
 }
 
 impl MemoryApplier {
@@ -1020,7 +1021,12 @@ impl MemoryApplier {
         Self {
             nodes: Vec::new(),
             layout_runtime: None,
+            slots: SlotBackend::default(),
         }
+    }
+
+    pub fn slots(&mut self) -> &mut SlotBackend {
+        &mut self.slots
     }
 
     pub fn with_node<N: Node + 'static, R>(
@@ -1118,10 +1124,19 @@ impl Applier for MemoryApplier {
             }
         };
 
-        // Recursively remove all children
+        // Recursively remove children, BUT ONLY if they are still owned by this node.
+        // If a child has been reused and reparented (parent != id), we must not remove it.
         for child_id in children {
-            // Ignore errors if child is already removed
-            let _ = self.remove(child_id);
+            let is_owned = if let Some(Some(child)) = self.nodes.get(child_id) {
+                child.parent() == Some(id)
+            } else {
+                false
+            };
+
+            if is_owned {
+                // Ignore errors if child is already removed
+                let _ = self.remove(child_id);
+            }
         }
 
         // Finally, remove this node
@@ -1767,26 +1782,15 @@ impl Composer {
         // If we have a matching node, advance cursor and reuse it
         if let Some(id) = existing_id {
             if type_matches {
-                let mut reuse_allowed = true;
-                let parent_contains = {
-                    let parent_stack = self.parent_stack();
-                    let contains = parent_stack
-                        .last()
-                        .map(|frame| frame.previous.contains(&id))
-                        .unwrap_or(true);
-                    contains
-                };
-                if !parent_contains {
-                    reuse_allowed = false;
-                }
+                // Type matches - reuse this node. The push_parent conditional ensures
+                // that new parents start with empty previous children, so we don't
+                // accidentally inherit children from a different parent.
+                let reuse_allowed = true;
+                
                 #[cfg(not(target_arch = "wasm32"))]
                 if std::env::var("COMPOSE_DEBUG").is_ok() {
-                    eprintln!("emit_node: candidate #{id} parent_contains={parent_contains}");
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                if !reuse_allowed && std::env::var("COMPOSE_DEBUG").is_ok() {
                     eprintln!(
-                        "emit_node: not reusing node #{id} despite type match; creating new instance"
+                        "emit_node: candidate #{id} reuse_allowed={reuse_allowed}"
                     );
                 }
 
@@ -1919,11 +1923,15 @@ impl Composer {
         let remembered = self.remember(ParentChildren::default);
         let reused = self.core.last_node_reused.take().unwrap_or(true);
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
+
+        // Only carry over previous children when the parent was reused (or in subcompose).
+        // Otherwise, start fresh to prevent nodes from teleporting between parents.
         let previous = if reused || in_subcompose {
             remembered.with(|entry| entry.children.clone())
         } else {
             Vec::new()
         };
+        
         self.parent_stack().push(ParentFrame {
             id,
             remembered,
@@ -1969,11 +1977,23 @@ impl Composer {
                                 // Bubble BEFORE clearing parent link so bubbling can verify consistency
                                 bubble_layout_dirty(applier, id);
                                 // Now clear parent link and unmount
-                                if let Ok(node) = applier.get_mut(child) {
-                                    node.on_removed_from_parent();
-                                    node.unmount();
+                                // Now clear parent link and unmount, but ONLY if we are still the parent.
+                                // If the node was reparented (moved to another node), we must not interfere.
+                                let should_remove = if let Ok(node) = applier.get_mut(child) {
+                                    if node.parent() == Some(id) {
+                                        node.on_removed_from_parent();
+                                        node.unmount();
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    true
+                                };
+                                
+                                if should_remove {
+                                    let _ = applier.remove(child);
                                 }
-                                let _ = applier.remove(child);
                                 Ok(())
                             }));
                     }

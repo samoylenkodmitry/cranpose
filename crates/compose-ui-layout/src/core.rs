@@ -63,6 +63,14 @@ pub trait Placeable {
 
     /// Returns the identifier for the underlying layout node.
     fn node_id(&self) -> NodeId;
+
+    /// Returns the accumulated content offset from the coordinator chain.
+    /// This is used by layout modifiers (like scroll) to report where content
+    /// should be positioned within this placeable's bounds.
+    /// Default is (0.0, 0.0) for no offset.
+    fn content_offset(&self) -> (f32, f32) {
+        (0.0, 0.0)
+    }
 }
 
 /// Scope for measurement operations.

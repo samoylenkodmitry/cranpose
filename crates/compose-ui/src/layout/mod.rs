@@ -14,9 +14,10 @@ use std::{
 };
 
 use compose_core::{
-    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
+    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, NodeError, NodeId,
     Phase, RuntimeHandle, SlotBackend, SlotsHost, SnapshotStateObserver,
 };
+
 
 use self::coordinator::NodeCoordinator;
 use self::core::Measurable;
@@ -27,6 +28,7 @@ use crate::modifier::{
     collect_semantics_from_modifier, collect_slices_from_modifier, DimensionConstraint, EdgeInsets,
     Modifier, ModifierNodeSlices, Point, Rect as GeometryRect, ResolvedModifiers, Size,
 };
+
 use crate::subcompose_layout::SubcomposeLayoutNode;
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles};
 use compose_foundation::InvalidationKind;
@@ -77,10 +79,115 @@ impl ModifierNodeContext for LayoutNodeContext {
 
 static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
 
+/// Forces all layout caches to be invalidated on the next measure by incrementing the epoch.
+///
+/// # ⚠️ Internal Use Only - NOT Public API
+///
+/// **This function is hidden from public documentation and MUST NOT be called by external code.**
+///
+/// Only `compose-app-shell` may call this for rare global events:
+/// - Window/viewport resize
+/// - Global font scale or density changes
+/// - Debug toggles that affect all layout
+///
+/// **This is O(entire app size) - extremely expensive!**
+///
+/// # For Local Changes
+///
+/// **Do NOT use this for scroll, single-node mutations, or any local layout change.**
+/// Instead, use the scoped repass mechanism:
+/// ```rust,ignore
+/// compose_ui::schedule_layout_repass(node_id);
+/// ```
+///
+/// The scoped path bubbles dirty flags without invalidating all caches, giving you O(subtree) instead of O(app).
+#[doc(hidden)]
+pub fn invalidate_all_layout_caches() {
+    NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+/// RAII guard that:
+/// - moves the current MemoryApplier into a ConcreteApplierHost
+/// - holds a shared handle to the SlotBackend used by LayoutBuilder
+/// - on Drop, always:
+///   * restores slots into the host from the shared handle
+///   * moves the original MemoryApplier back into the Composition
+///
+/// This makes `measure_layout` panic/Err-safe wrt both the applier and slots.
+/// The key invariant: guard and builder share the same `Rc<RefCell<SlotBackend>>`,
+/// so the guard never loses access to the authoritative slots even on panic.
+struct ApplierSlotGuard<'a> {
+    /// The `MemoryApplier` inside the Composition::applier that we must restore into.
+    target: &'a mut MemoryApplier,
+    /// Host that owns the original MemoryApplier while layout is running.
+    host: Rc<ConcreteApplierHost<MemoryApplier>>,
+    /// Shared handle to the slot table. Both the guard and the builder hold a clone.
+    /// On Drop, we write whatever is in this handle back into the applier.
+    slots: Rc<RefCell<SlotBackend>>,
+}
+
+impl<'a> ApplierSlotGuard<'a> {
+    /// Creates a new guard:
+    /// - moves the current MemoryApplier out of `target` into a host
+    /// - takes the current slots out of the host and wraps them in a shared handle
+    fn new(target: &'a mut MemoryApplier) -> Self {
+        // Move the original applier into a host; leave `target` with a fresh one
+        let original_applier = std::mem::replace(target, MemoryApplier::new());
+        let host = Rc::new(ConcreteApplierHost::new(original_applier));
+
+        // Take slots from the host into a shared handle
+        let slots = {
+            let mut applier_ref = host.borrow_typed();
+            std::mem::take(applier_ref.slots())
+        };
+        let slots = Rc::new(RefCell::new(slots));
+
+        Self {
+            target,
+            host,
+            slots,
+        }
+    }
+
+    /// Rc to pass into LayoutBuilder::new_with_epoch
+    fn host(&self) -> Rc<ConcreteApplierHost<MemoryApplier>> {
+        Rc::clone(&self.host)
+    }
+
+    /// Returns the shared handle to slots for the builder to use.
+    /// The builder clones this Rc, so both guard and builder share the same slots.
+    fn slots_handle(&self) -> Rc<RefCell<SlotBackend>> {
+        Rc::clone(&self.slots)
+    }
+}
+
+impl Drop for ApplierSlotGuard<'_> {
+    fn drop(&mut self) {
+        // 1) Restore slots into the host's MemoryApplier from the shared handle.
+        // This works correctly whether we're on the success path or panic/error path,
+        // because we always have the shared handle.
+        {
+            let mut applier_ref = self.host.borrow_typed();
+            *applier_ref.slots() = std::mem::take(&mut *self.slots.borrow_mut());
+        }
+
+        // 2) Move the original MemoryApplier (with restored/updated slots) back into `target`
+        {
+            let mut applier_ref = self.host.borrow_typed();
+            let original_applier = std::mem::take(&mut *applier_ref);
+            let _ = std::mem::replace(self.target, original_applier);
+        }
+        // No Rc::try_unwrap in Drop → no "panic during panic" risk.
+    }
+}
+
+
 /// Result of measuring through the modifier node chain.
 struct ModifierChainMeasurement {
     result: MeasureResult,
-    padding: EdgeInsets,
+    /// Content offset for scroll/inner transforms - NOT padding semantics
+    content_offset: Point,
+    /// Node's own offset (from OffsetNode, affects position in parent)
     offset: Point,
 }
 
@@ -227,6 +334,8 @@ impl LayoutTree {
 pub struct LayoutBox {
     pub node_id: NodeId,
     pub rect: GeometryRect,
+    /// Content offset for scroll/inner transforms (applies to children, NOT this node's position)
+    pub content_offset: Point,
     pub node_data: LayoutNodeData,
     pub children: Vec<LayoutBox>,
 }
@@ -235,12 +344,14 @@ impl LayoutBox {
     pub fn new(
         node_id: NodeId,
         rect: GeometryRect,
+        content_offset: Point,
         node_data: LayoutNodeData,
         children: Vec<LayoutBox>,
     ) -> Self {
         Self {
             node_id,
             rect,
+            content_offset,
             node_data,
             children,
         }
@@ -407,10 +518,9 @@ pub fn measure_layout(
         }) {
             Ok(tuple) => tuple,
             Err(NodeError::TypeMismatch { .. }) => {
-                let (layout_dirty, semantics_dirty) = {
-                    let node = applier.get_mut(root)?;
-                    (node.needs_layout(), node.needs_semantics())
-                };
+                let node = applier.get_mut(root)?;
+                let layout_dirty = node.needs_layout();
+                let semantics_dirty = node.needs_semantics();
                 (layout_dirty, semantics_dirty, 0)
             }
             Err(err) => return Err(err),
@@ -425,38 +535,71 @@ pub fn measure_layout(
         NEXT_CACHE_EPOCH.load(Ordering::Relaxed)
     };
 
-    let original_applier = std::mem::replace(applier, MemoryApplier::new());
-    let applier_host = Rc::new(ConcreteApplierHost::new(original_applier));
-    let mut builder = LayoutBuilder::new_with_epoch(Rc::clone(&applier_host), epoch);
+    // Move the current applier into a host and set up a guard that will
+    // ALWAYS restore:
+    // - the MemoryApplier back into `applier`
+    // - the SlotBackend back into that MemoryApplier
+    //
+    // IMPORTANT: Declare the guard *before* the builder so the builder
+    // is dropped first (both on Ok and on unwind).
+    let guard = ApplierSlotGuard::new(applier);
+    let applier_host = guard.host();
+    let slots_handle = guard.slots_handle();
+
+    // Give the builder the shared slots handle - both guard and builder
+    // now share access to the same SlotBackend via Rc<RefCell<_>>.
+    let mut builder = LayoutBuilder::new_with_epoch(
+        Rc::clone(&applier_host),
+        epoch,
+        Rc::clone(&slots_handle),
+    );
+
+    // ---- Measurement -------------------------------------------------------
+    // If measurement fails, the guard will restore slots from the shared handle
+    // on drop - this is safe because the handle always contains valid slots.
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
+
+    // ---- Metadata ----------------------------------------------------------
     let metadata = {
         let mut applier_ref = applier_host.borrow_typed();
         collect_runtime_metadata(&mut applier_ref, &measured)?
     };
+
+    // ---- Semantics snapshot ------------------------------------------------
     let semantics_snapshot = {
         let mut applier_ref = applier_host.borrow_typed();
         collect_semantics_snapshot(&mut applier_ref, &measured)?
     };
+
+    // Drop builder before guard - slots are already in the shared handle.
+    // Guard's Drop will write them back to the applier.
     drop(builder);
-    let applier_inner = Rc::try_unwrap(applier_host)
-        .unwrap_or_else(|_| panic!("layout builder should be sole owner of applier host"))
-        .into_inner();
-    *applier = applier_inner;
+
+    // DO NOT manually unwrap `applier_host` or replace `applier` here.
+    // `ApplierSlotGuard::drop` will restore everything when this function returns.
+
+    // Build semantics and layout trees from `measured` + metadata + snapshot
     let semantics_root = build_semantics_node(&measured, &metadata, &semantics_snapshot);
     let semantics = SemanticsTree::new(semantics_root);
     let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
+
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
 }
+
 
 struct LayoutBuilder {
     state: Rc<RefCell<LayoutBuilderState>>,
 }
 
 impl LayoutBuilder {
-    fn new_with_epoch(applier: Rc<ConcreteApplierHost<MemoryApplier>>, epoch: u64) -> Self {
+    fn new_with_epoch(
+        applier: Rc<ConcreteApplierHost<MemoryApplier>>,
+        epoch: u64,
+        slots: Rc<RefCell<SlotBackend>>,
+    ) -> Self {
         Self {
             state: Rc::new(RefCell::new(LayoutBuilderState::new_with_epoch(
-                applier, epoch,
+                applier, epoch, slots,
             ))),
         }
     }
@@ -477,19 +620,26 @@ impl LayoutBuilder {
 struct LayoutBuilderState {
     applier: Rc<ConcreteApplierHost<MemoryApplier>>,
     runtime_handle: Option<RuntimeHandle>,
-    slots: SlotBackend,
+    /// Shared handle to the slot table. This is shared with ApplierSlotGuard
+    /// to ensure panic-safety: even if we panic, the guard can restore slots.
+    slots: Rc<RefCell<SlotBackend>>,
     cache_epoch: u64,
     tmp_measurables: Vec<Box<dyn Measurable>>,
     tmp_records: Vec<(NodeId, ChildRecord)>,
 }
 
 impl LayoutBuilderState {
-    fn new_with_epoch(applier: Rc<ConcreteApplierHost<MemoryApplier>>, epoch: u64) -> Self {
+    fn new_with_epoch(
+        applier: Rc<ConcreteApplierHost<MemoryApplier>>,
+        epoch: u64,
+        slots: Rc<RefCell<SlotBackend>>,
+    ) -> Self {
         let runtime_handle = applier.borrow_typed().runtime_handle();
+        
         Self {
             applier,
             runtime_handle,
-            slots: SlotBackend::default(),
+            slots,
             cache_epoch: epoch,
             tmp_measurables: Vec::new(),
             tmp_records: Vec::new(),
@@ -567,6 +717,7 @@ impl LayoutBuilderState {
             node_id,
             Size::default(),
             Point { x: 0.0, y: 0.0 },
+            Point::default(), // No content offset for fallback nodes
             Vec::new(),
         )))
     }
@@ -697,6 +848,7 @@ impl LayoutBuilderState {
             node_id,
             Size { width, height },
             offset,
+            Point::default(), // Subcompose nodes: content_offset handled by child layout
             children,
         ))))
     }
@@ -714,7 +866,6 @@ impl LayoutBuilderState {
         measure_policy: &Rc<dyn MeasurePolicy>,
         constraints: Constraints,
     ) -> ModifierChainMeasurement {
-        use crate::modifier_nodes::{OffsetNode, PaddingNode};
         use compose_foundation::NodeCapabilities;
 
         // Collect layout node information from the modifier chain
@@ -724,7 +875,6 @@ impl LayoutBuilderState {
             usize,
             Rc<RefCell<Box<dyn compose_foundation::ModifierNode>>>,
         )> = Vec::new();
-        let mut padding = EdgeInsets::default();
         let mut offset = Point::default();
 
         {
@@ -745,15 +895,16 @@ impl LayoutBuilderState {
                         if let Some(index) = node_ref.entry_index() {
                             // Get the Rc clone for this node
                             if let Some(node_rc) = chain_handle.chain().get_node_rc(index) {
-                                layout_node_data.push((index, node_rc));
+                                layout_node_data.push((index, Rc::clone(&node_rc)));
                             }
 
-                            // Calculate padding and offset for backward compat
+                            // Extract offset from OffsetNode for the node's own position
+                            // The coordinator chain handles placement_offset (for children),
+                            // but the node's offset affects where IT is positioned in the parent
                             node_ref.with_node(|node| {
-                                let any = node.as_any();
-                                if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-                                    padding += padding_node.padding();
-                                } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
+                                if let Some(offset_node) =
+                                    node.as_any().downcast_ref::<crate::modifier_nodes::OffsetNode>()
+                                {
                                     let delta = offset_node.offset();
                                     offset.x += delta.x;
                                     offset.y += delta.y;
@@ -787,7 +938,7 @@ impl LayoutBuilderState {
 
         // Wrap each layout modifier node in a coordinator, building the chain
         let mut current_coordinator = inner_coordinator;
-        for (_node_index, node_rc) in layout_node_data {
+        for (_, node_rc) in layout_node_data {
             current_coordinator = Box::new(coordinator::LayoutModifierCoordinator::new(
                 node_rc,
                 current_coordinator,
@@ -801,6 +952,24 @@ impl LayoutBuilderState {
             width: placeable.width(),
             height: placeable.height(),
         };
+
+        // Get accumulated content offset from the placeable (computed during measure)
+        let content_offset = placeable.content_offset();
+        let all_placement_offset = Point {
+            x: content_offset.0,
+            y: content_offset.1,
+        };
+
+        // The content_offset for scroll/inner transforms is the accumulated placement offset
+        // MINUS the node's own offset (which affects its position in the parent, not content position).
+        // This properly separates: node position (offset) vs inner content position (content_offset).
+        let content_offset = Point {
+            x: all_placement_offset.x - offset.x,
+            y: all_placement_offset.y - offset.y,
+        };
+
+
+        // offset was already extracted from OffsetNode above
 
         let placements = policy_result
             .borrow_mut()
@@ -833,7 +1002,7 @@ impl LayoutBuilderState {
                 size: final_size,
                 placements,
             },
-            padding,
+            content_offset,
             offset,
         }
     }
@@ -968,7 +1137,7 @@ impl LayoutBuilderState {
         }
 
         // Modifier chain always succeeds - use the node-driven measurement.
-        let (width, height, policy_result, padding, offset) = {
+        let (width, height, policy_result, content_offset, offset) = {
             let result = modifier_chain_result;
             // The size is already correct from the modifier chain (modifiers like SizeNode
             // have already enforced their constraints), so we use it directly.
@@ -980,7 +1149,7 @@ impl LayoutBuilderState {
                 result.result.size.width,
                 result.result.size.height,
                 result.result,
-                result.padding,
+                result.content_offset,
                 result.offset,
             )
         };
@@ -999,9 +1168,10 @@ impl LayoutBuilderState {
                         })
                         .or_else(|| record.last_position.borrow().as_ref().copied())
                         .unwrap_or(Point { x: 0.0, y: 0.0 });
+                    // Apply content_offset (from scroll/transforms) to child positioning
                     let position = Point {
-                        x: padding.left + base_position.x,
-                        y: padding.top + base_position.y,
+                        x: content_offset.x + base_position.x,
+                        y: content_offset.y + base_position.y,
                     };
                     measured_children.push(MeasuredChild {
                         node: measured,
@@ -1015,6 +1185,7 @@ impl LayoutBuilderState {
             node_id,
             Size { width, height },
             offset,
+            content_offset,
             measured_children,
         ));
 
@@ -1060,6 +1231,7 @@ impl LayoutNodeSnapshot {
     }
 }
 
+// Helper types for accessing subsets of LayoutBuilderState
 struct VecPools {
     state: Rc<RefCell<LayoutBuilderState>>,
     measurables: Option<Vec<Box<dyn Measurable>>>,
@@ -1121,8 +1293,9 @@ struct SlotsGuard {
 impl SlotsGuard {
     fn take(state: Rc<RefCell<LayoutBuilderState>>) -> Self {
         let slots = {
-            let mut state_mut = state.borrow_mut();
-            std::mem::take(&mut state_mut.slots)
+            let state_ref = state.borrow();
+            let mut slots_ref = state_ref.slots.borrow_mut();
+            std::mem::take(&mut *slots_ref)
         };
         Self {
             state,
@@ -1144,11 +1317,12 @@ impl SlotsGuard {
 impl Drop for SlotsGuard {
     fn drop(&mut self) {
         if let Some(slots) = self.slots.take() {
-            let mut state = self.state.borrow_mut();
-            state.slots = slots;
+            let state_ref = self.state.borrow();
+            *state_ref.slots.borrow_mut() = slots;
         }
     }
 }
+
 
 #[derive(Clone)]
 struct LayoutMeasureHandle {
@@ -1173,16 +1347,26 @@ impl LayoutMeasureHandle {
 pub(crate) struct MeasuredNode {
     node_id: NodeId,
     size: Size,
+    /// Node's position offset relative to parent (from OffsetNode etc.)
     offset: Point,
+    /// Content offset for scroll/inner transforms (NOT node position)
+    content_offset: Point,
     children: Vec<MeasuredChild>,
 }
 
 impl MeasuredNode {
-    fn new(node_id: NodeId, size: Size, offset: Point, children: Vec<MeasuredChild>) -> Self {
+    fn new(
+        node_id: NodeId,
+        size: Size,
+        offset: Point,
+        content_offset: Point,
+        children: Vec<MeasuredChild>,
+    ) -> Self {
         Self {
             node_id,
             size,
             offset,
+            content_offset,
             children,
         }
     }
@@ -1464,7 +1648,7 @@ fn measure_node_with_host(
         Some(handle) => Some(handle),
         None => applier.borrow_typed().runtime_handle(),
     };
-    let mut builder = LayoutBuilder::new_with_epoch(applier, epoch);
+    let mut builder = LayoutBuilder::new_with_epoch(applier, epoch, Rc::new(RefCell::new(SlotBackend::default())));
     builder.set_runtime_handle(runtime_handle);
     builder.measure_node(node_id, constraints)
 }
@@ -1576,21 +1760,26 @@ fn runtime_metadata_for(
     node_id: NodeId,
 ) -> Result<RuntimeNodeMetadata, NodeError> {
     // Try LayoutNode (the primary modern path)
-    if let Some(layout) = try_clone::<LayoutNode>(applier, node_id)? {
+    // IMPORTANT: We use with_node (reference) instead of try_clone because cloning
+    // LayoutNode creates a NEW ModifierChainHandle with NEW nodes and NEW handlers,
+    // which would lose gesture state like press_position.
+    if let Ok(meta) = applier.with_node::<LayoutNode, _>(node_id, |layout| {
         // Extract text content from the modifier chain instead of measure policy
-        let role = if let Some(text) = extract_text_from_layout_node(&layout) {
+        let role = if let Some(text) = extract_text_from_layout_node(layout) {
             SemanticsRole::Text { value: text }
         } else {
             SemanticsRole::Layout
         };
 
-        return Ok(RuntimeNodeMetadata {
+        RuntimeNodeMetadata {
             modifier: layout.modifier.clone(),
             resolved_modifiers: layout.resolved_modifiers(),
             modifier_slices: layout.modifier_slices_snapshot(),
             role,
             button_handler: None,
-        });
+        }
+    }) {
+        return Ok(meta);
     }
 
     // Try SubcomposeLayoutNode
@@ -1692,6 +1881,7 @@ fn build_layout_tree_from_metadata(
         origin: Point,
         metadata: &HashMap<NodeId, RuntimeNodeMetadata>,
     ) -> LayoutBox {
+        // Include the node's own offset (from OffsetNode) in its position
         let top_left = Point {
             x: origin.x + node.offset.x,
             y: origin.y + node.offset.y,
@@ -1721,7 +1911,7 @@ fn build_layout_tree_from_metadata(
                 place(&child.node, child_origin, metadata)
             })
             .collect();
-        LayoutBox::new(node.node_id, rect, data, children)
+        LayoutBox::new(node.node_id, rect, node.content_offset, data, children)
     }
 
     LayoutTree::new(place(node, Point { x: 0.0, y: 0.0 }, metadata))
@@ -1856,17 +2046,7 @@ fn normalize_constraints(mut constraints: Constraints) -> Constraints {
     constraints
 }
 
-fn try_clone<T: Node + Clone + 'static>(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-) -> Result<Option<T>, NodeError> {
-    match applier.with_node(node_id, |node: &mut T| node.clone()) {
-        Ok(value) => Ok(Some(value)),
-        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
-        Err(err) => Err(err),
-    }
-}
-
 #[cfg(test)]
 #[path = "tests/layout_tests.rs"]
 mod tests;
+
