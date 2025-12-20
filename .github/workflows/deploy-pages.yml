@@ -35,7 +35,12 @@ jobs:
           cache-on-failure: true
 
       - name: Install binaryen (wasm-opt) for size optimization
-        run: sudo apt-get install -y binaryen
+        run: |
+          # Ubuntu apt has outdated binaryen - install version 120 manually
+          # Required for bulk memory operations that Rust 1.83+ emits by default
+          curl -L https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-x86_64-linux.tar.gz | tar xz
+          sudo mv binaryen-version_120/bin/* /usr/local/bin/
+          wasm-opt --version
 
       - name: Install wasm-pack
         run: cargo install wasm-pack --version 0.13.1

@@ -5,7 +5,9 @@ edition = "2021"
 
 [package.metadata.wasm-pack.profile.release]
 # Enable wasm-opt with size optimization (can reduce WASM size by 20-40%)
-wasm-opt = ["-Oz"]
+# --all-features enables all standard WASM features that Rust 1.83+ uses by default
+# (bulk-memory, nontrapping-float-to-int, sign-ext, mutable-globals)
+wasm-opt = ["-Oz", "--all-features"]
 
 # Support both binary (desktop) and cdylib (Android)
 # IMPORTANT: The cdylib name (libdesktop_app.so) must match the android.app.lib_name
