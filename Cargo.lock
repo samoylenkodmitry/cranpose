@@ -536,8 +536,8 @@ dependencies = [
  "compose-runtime-std",
  "compose-ui",
  "compose-ui-graphics",
- "instant",
  "log",
+ "web-time",
 ]
 
 [[package]]
@@ -565,7 +565,7 @@ dependencies = [
  "compose-core",
  "compose-ui-graphics",
  "compose-ui-layout",
- "instant",
+ "web-time",
 ]
 
 [[package]]
@@ -680,8 +680,8 @@ dependencies = [
  "criterion",
  "futures-task",
  "indexmap",
- "instant",
  "smallvec 1.15.1",
+ "web-time",
 ]
 
 [[package]]

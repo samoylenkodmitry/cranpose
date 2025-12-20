@@ -9,7 +9,7 @@
 //! - Uses platform timer scheduling (`WaitUntil`) instead of busy-polling
 
 use std::cell::Cell;
-use instant::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// Cursor blink interval in milliseconds.
 pub const BLINK_INTERVAL_MS: u64 = 500;

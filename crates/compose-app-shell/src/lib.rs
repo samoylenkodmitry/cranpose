@@ -3,8 +3,8 @@
 mod hit_path_tracker;
 
 use std::fmt::Debug;
-// Use instant crate for cross-platform time support (native + WASM)
-use instant::Instant;
+// Use web_time for cross-platform time support (native + WASM) - compatible with winit
+use web_time::Instant;
 
 use compose_core::{enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier, Composition, Key, MemoryApplier, NodeError};
 use compose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
@@ -158,7 +158,7 @@ where
 
     /// Returns the next scheduled event time for cursor blink.
     /// Use this for `ControlFlow::WaitUntil` scheduling.
-    pub fn next_event_time(&self) -> Option<instant::Instant> {
+    pub fn next_event_time(&self) -> Option<web_time::Instant> {
         compose_ui::next_cursor_blink_time()
     }
 

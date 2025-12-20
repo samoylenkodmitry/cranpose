@@ -69,7 +69,7 @@ pub struct TextFieldStateInner {
     /// Desired column for up/down navigation (preserved between vertical moves)
     desired_column: Cell<Option<usize>>,
     /// Last edit timestamp for undo coalescing
-    last_edit_time: Cell<Option<instant::Instant>>,
+    last_edit_time: Cell<Option<web_time::Instant>>,
     /// Snapshot before the current coalescing group started
     /// Only pushed to undo_stack when coalescing breaks
     pending_undo_snapshot: RefCell<Option<TextFieldValue>>,
@@ -396,7 +396,7 @@ impl TextFieldState {
         }
         
         if changed {
-            let now = instant::Instant::now();
+            let now = web_time::Instant::now();
             
             // Determine if we should break the undo coalescing group
             let should_break_group = {

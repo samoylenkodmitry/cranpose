@@ -59,7 +59,7 @@ pub(crate) struct TextFieldRefs {
     /// Drag anchor position (byte offset) for click-drag selection
     pub drag_anchor: Rc<Cell<Option<usize>>>,
     /// Last click time for double/triple-click detection
-    pub last_click_time: Rc<Cell<Option<instant::Instant>>>,
+    pub last_click_time: Rc<Cell<Option<web_time::Instant>>>,
     /// Click count (1=single, 2=double, 3=triple)
     pub click_count: Rc<Cell<u8>>,
     /// Node ID for scoped layout invalidation
@@ -74,7 +74,7 @@ impl TextFieldRefs {
             content_offset: Rc::new(Cell::new(0.0_f32)),
             content_y_offset: Rc::new(Cell::new(0.0_f32)),
             drag_anchor: Rc::new(Cell::new(None::<usize>)),
-            last_click_time: Rc::new(Cell::new(None::<instant::Instant>)),
+            last_click_time: Rc::new(Cell::new(None::<web_time::Instant>)),
             click_count: Rc::new(Cell::new(0_u8)),
             node_id: Rc::new(Cell::new(None::<compose_core::NodeId>)),
         }
@@ -178,7 +178,7 @@ impl TextFieldModifierNode {
                     let handler = TextFieldHandler::new(state.clone(), refs.node_id.get(), line_limits);
                     crate::text_field_focus::request_focus(refs.is_focused.clone(), handler);
                     
-                    let now = instant::Instant::now();
+                    let now = web_time::Instant::now();
                     let text = state.text();
                     let pos = crate::text::get_offset_for_position(&text, click_x, click_y);
                     
