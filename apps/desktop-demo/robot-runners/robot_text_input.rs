@@ -27,6 +27,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Text Input Test")
         .with_size(900, 700)
+        .with_headless(true)
         .with_test_driver(|robot| {
             // Timeout after a full robot run budget.
             std::thread::spawn(|| {

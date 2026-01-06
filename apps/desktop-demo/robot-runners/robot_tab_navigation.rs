@@ -24,6 +24,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Tab Navigation Test")
         .with_size(1024, 768) // Larger size to ensure all tabs are visible
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

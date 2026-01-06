@@ -34,6 +34,7 @@ fn main() {
     AppLauncher::new()
         .with_title("LazyListState Reactivity Test")
         .with_size(1200, 800)
+        .with_headless(true)
         .with_test_driver(|robot| {
             // Timeout after 30 seconds
             std::thread::spawn(|| {

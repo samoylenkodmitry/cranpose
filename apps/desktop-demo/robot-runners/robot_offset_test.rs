@@ -29,6 +29,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Offset Test")
         .with_size(900, 700)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("App launched! Waiting for initial render...");
             std::thread::sleep(Duration::from_secs(1));

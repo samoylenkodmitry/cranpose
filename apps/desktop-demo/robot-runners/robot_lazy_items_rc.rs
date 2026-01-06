@@ -172,6 +172,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Rc Items Test")
         .with_size(800, 800)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(300));

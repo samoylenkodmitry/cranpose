@@ -23,6 +23,7 @@ fn main() {
     AppLauncher::new()
         .with_title("LazyMax Test")
         .with_size(800, 600)
+        .with_headless(true)
         .with_test_driver(|robot| {
             use std::time::Instant;
 

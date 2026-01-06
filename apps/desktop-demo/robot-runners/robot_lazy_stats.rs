@@ -19,6 +19,7 @@ fn main() {
     AppLauncher::new()
         .with_title("LazyStats Test")
         .with_size(1200, 800)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));

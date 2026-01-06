@@ -25,6 +25,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Increment Bug Test")
         .with_size(800, 600)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

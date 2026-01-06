@@ -21,6 +21,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Content-Type Reuse Test")
         .with_size(900, 700)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(200));

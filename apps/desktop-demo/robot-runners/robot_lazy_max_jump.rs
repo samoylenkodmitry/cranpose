@@ -22,6 +22,7 @@ fn main() {
     AppLauncher::new()
         .with_title("LazyList usize::MAX Jump Middle Test")
         .with_size(500, 700)
+        .with_headless(true)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
 

@@ -53,6 +53,7 @@ fn main() {
     AppLauncher::new()
         .with_title("UI Breakage Repro")
         .with_size(400, 300)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched");
             std::thread::sleep(Duration::from_millis(500));

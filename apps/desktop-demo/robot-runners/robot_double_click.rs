@@ -17,6 +17,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Double-Click Test")
         .with_size(600, 400)
+        .with_headless(true)
         .with_test_driver(|robot| {
             // Timeout after 15 seconds
             std::thread::spawn(|| {

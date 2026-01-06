@@ -24,6 +24,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Click Drag Test")
         .with_size(800, 600)
+        .with_headless(true)
         .with_test_driver(|robot| {
             // Timeout after a full robot run budget.
             std::thread::spawn(|| {

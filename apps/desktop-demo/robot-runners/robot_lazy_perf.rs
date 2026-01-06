@@ -128,6 +128,7 @@ fn main() {
     AppLauncher::new()
         .with_title("LazyColumn Perf Test")
         .with_size(800, 600)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched");
 

@@ -12,6 +12,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Lazy Infinite Scroll Test")
         .with_size(400, 600) // Viewport height 600
+        .with_headless(true)
         .with_test_driver(|robot| {
              std::thread::sleep(Duration::from_millis(500));
 

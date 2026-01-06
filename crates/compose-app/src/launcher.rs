@@ -15,6 +15,12 @@ pub struct AppSettings {
     pub fonts: Option<&'static [&'static [u8]]>,
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
+    /// Run in headless mode (window hidden, for robot testing)
+    ///
+    /// When enabled, the window is created but not shown. This allows
+    /// robot tests to run in parallel without cluttering the screen
+    /// and enables CI environments without a display server.
+    pub headless: bool,
     /// Optional test driver to control the application (robot testing)
     #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
     pub test_driver: Option<Box<dyn FnOnce(crate::desktop::Robot) + Send + 'static>>,
@@ -28,6 +34,7 @@ impl Default for AppSettings {
             initial_height: 600,
             fonts: None,
             android_use_system_fonts: false,
+            headless: false,
             #[cfg(all(feature = "desktop", feature = "renderer-wgpu", feature = "robot"))]
             test_driver: None,
         }
@@ -109,6 +116,39 @@ impl AppLauncher {
     /// Use static fonts via `with_fonts()` for reliable rendering.
     pub fn with_android_use_system_fonts(mut self, use_system_fonts: bool) -> Self {
         self.settings.android_use_system_fonts = use_system_fonts;
+        self
+    }
+
+    /// Enable headless mode for robot testing.
+    ///
+    /// When headless mode is enabled, the window is created but not shown.
+    /// This allows robot tests to:
+    /// - Run in parallel without windows overlapping or stealing focus
+    /// - Run in CI environments without a display server (using Xvfb or similar)
+    /// - Execute faster by skipping window decoration rendering
+    ///
+    /// Note: The app still creates a full WGPU surface for accurate rendering tests.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use compose_app::AppLauncher;
+    ///
+    /// AppLauncher::new()
+    ///     .with_title("Robot Test")
+    ///     .with_size(800, 600)
+    ///     .with_headless(true)
+    ///     .with_test_driver(|robot| {
+    ///         robot.wait_for_idle().unwrap();
+    ///         robot.click(100.0, 100.0).unwrap();
+    ///         robot.exit().unwrap();
+    ///     })
+    ///     .run(|| {
+    ///         // Your composable UI here
+    ///     });
+    /// ```
+    pub fn with_headless(mut self, headless: bool) -> Self {
+        self.settings.headless = headless;
         self
     }
 

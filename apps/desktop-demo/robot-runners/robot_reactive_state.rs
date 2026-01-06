@@ -29,6 +29,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Reactive State Test")
         .with_size(900, 700)
+        .with_headless(true)
         .with_test_driver(|robot| {
             // Timeout after 20 seconds
             std::thread::spawn(|| {

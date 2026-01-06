@@ -560,6 +560,7 @@ impl ApplicationHandler for App {
 
         let initial_width = self.settings.initial_width;
         let initial_height = self.settings.initial_height;
+        let headless = self.settings.headless;
 
         let window: Arc<dyn Window> = Arc::from(
             event_loop
@@ -569,7 +570,9 @@ impl ApplicationHandler for App {
                         .with_surface_size(LogicalSize::new(
                             initial_width as f64,
                             initial_height as f64,
-                        )),
+                        ))
+                        // Hide window in headless mode for parallel robot testing
+                        .with_visible(!headless),
                 )
                 .expect("failed to create window"),
         );

@@ -18,6 +18,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Multiline Click Test")
         .with_size(600, 600)
+        .with_headless(true)
         .with_test_driver(|robot| {
             // Timeout after 20 seconds
             std::thread::spawn(|| {

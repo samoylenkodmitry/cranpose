@@ -31,6 +31,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Tab Selection Test")
         .with_size(1200, 800)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

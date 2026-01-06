@@ -17,6 +17,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Drag Selection Test")
         .with_size(600, 400)
+        .with_headless(true)
         .with_test_driver(|robot| {
             const TEST_TIMEOUT_SECS: u64 = 60;
             // Timeout after a full robot run budget.

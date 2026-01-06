@@ -21,6 +21,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Async Pause Button Test")
         .with_size(800, 600)
+        .with_headless(true)
         .with_test_driver(|robot| {
             // Timeout after a full robot run budget.
             std::thread::spawn(|| {

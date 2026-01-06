@@ -23,6 +23,7 @@ fn main() {
     AppLauncher::new()
         .with_title("LazyList Tab Test")
         .with_size(1024, 768)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("✓ App launched\n");
             std::thread::sleep(Duration::from_millis(500));

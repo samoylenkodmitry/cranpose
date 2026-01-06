@@ -28,6 +28,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Copy-Paste Test")
         .with_size(900, 700)
+        .with_headless(true)
         .with_test_driver(|robot| {
             // Timeout after 30 seconds
             std::thread::spawn(|| {

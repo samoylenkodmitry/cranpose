@@ -25,6 +25,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Robot Demo")
         .with_size(800, 600)
+        .with_headless(true)
         .with_test_driver(|robot| {
             println!("App launched! Starting robot interactions in 1 second...");
             std::thread::sleep(Duration::from_secs(1));

@@ -28,6 +28,7 @@ fn main() {
     AppLauncher::new()
         .with_title("Lazy Scroll Edge Cases")
         .with_size(400, 600)
+        .with_headless(true)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();
