@@ -419,7 +419,7 @@ impl GpuRenderer {
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        log::info!(
+        log::trace!(
             "🎨 Rendering: {} shapes, {} texts (size: {}x{})",
             shapes.len(),
             texts.len(),

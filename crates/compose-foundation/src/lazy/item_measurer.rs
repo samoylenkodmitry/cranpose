@@ -5,6 +5,7 @@
 use super::lazy_list_measure::LazyListMeasureConfig;
 use super::lazy_list_measured_item::LazyListMeasuredItem;
 use std::collections::VecDeque;
+use web_time::{Duration, Instant};
 
 /// Maximum items to measure per pass as a safety limit.
 ///
@@ -20,7 +21,7 @@ use std::collections::VecDeque;
 /// This provides a safety mechanism to prevent infinite loops or excessive
 /// computation time when measuring items, while adapting to device performance
 /// better than a hard item count limit.
-const DEFAULT_TIME_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
+const DEFAULT_TIME_BUDGET: Duration = Duration::from_millis(50);
 
 /// Maximum items to measure per pass as a hard safety limit.
 /// Used in addition to time budget to prevent memory exhaustion in extreme cases.
@@ -70,7 +71,7 @@ where
         first_item_index: usize,
         first_item_scroll_offset: f32,
     ) -> Vec<LazyListMeasuredItem> {
-        let start_time = std::time::Instant::now();
+        let start_time = Instant::now();
         let start_offset = self.config.before_content_padding - first_item_scroll_offset;
         let viewport_end = self.effective_viewport_size - self.config.after_content_padding;
 
@@ -108,7 +109,7 @@ where
         start_index: usize,
         start_offset: f32,
         viewport_end: f32,
-        start_time: std::time::Instant,
+        start_time: Instant,
     ) -> (Vec<LazyListMeasuredItem>, usize, f32) {
         let mut items = Vec::new();
         let mut current_index = start_index;
@@ -156,7 +157,7 @@ where
         mut current_index: usize,
         mut current_offset: f32,
         items: &mut Vec<LazyListMeasuredItem>,
-        start_time: std::time::Instant,
+        start_time: Instant,
     ) {
         let after_count = self
             .config
@@ -188,7 +189,7 @@ where
         &mut self,
         first_index: usize,
         first_offset: f32,
-        start_time: std::time::Instant,
+        start_time: Instant,
     ) -> Vec<LazyListMeasuredItem> {
         let before_count = self.config.beyond_bounds_item_count.min(first_index);
         let mut before_items = Vec::with_capacity(before_count);
