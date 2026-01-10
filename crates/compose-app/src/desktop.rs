@@ -527,10 +527,15 @@ struct App {
     /// Robot controller
     #[cfg(feature = "robot")]
     robot_controller: Option<RobotController>,
+    /// Input recorder for generating robot tests
+    recorder: Option<crate::recorder::InputRecorder>,
 }
 
 impl App {
-    fn new(settings: AppSettings, content: impl FnMut() + 'static) -> Self {
+    fn new(mut settings: AppSettings, content: impl FnMut() + 'static) -> Self {
+        // Create recorder if recording is enabled
+        let recorder = settings.record_to.take().map(crate::recorder::InputRecorder::new);
+        
         Self {
             settings,
             content: Some(Box::new(content)),
@@ -542,6 +547,7 @@ impl App {
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             #[cfg(feature = "robot")]
             robot_controller: None,
+            recorder,
         }
     }
 
@@ -697,6 +703,10 @@ impl ApplicationHandler for App {
         // Take the content closure (can only be called once)
         let content = self.content.take().expect("content already taken");
         let mut app = AppShell::new(renderer, default_root_key(), content);
+        
+        // Apply dev options (FPS counter, etc.)
+        app.set_dev_options(self.settings.dev_options.clone());
+        
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
 
@@ -735,6 +745,12 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => {
+                // Save recording if active
+                if let Some(recorder) = self.recorder.take() {
+                    if let Err(e) = recorder.finish() {
+                        eprintln!("[Recorder] Error saving recording: {}", e);
+                    }
+                }
                 event_loop.exit();
             }
             WindowEvent::SurfaceResized(new_size) => {
@@ -781,6 +797,10 @@ impl ApplicationHandler for App {
                 if primary {
                     let logical = platform.pointer_position(position);
                     app.set_cursor(logical.x, logical.y);
+                    // Record mouse move
+                    if let Some(recorder) = &mut self.recorder {
+                        recorder.record_mouse_move(logical.x, logical.y);
+                    }
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -800,11 +820,19 @@ impl ApplicationHandler for App {
                     match state {
                         ElementState::Pressed => {
                             app.pointer_pressed();
+                            // Record mouse down
+                            if let Some(recorder) = &mut self.recorder {
+                                recorder.record_mouse_down();
+                            }
                         }
                         ElementState::Released => {
                             app.pointer_released();
                             // Sync selection to PRIMARY (Linux X11 middle-click paste)
                             app.sync_selection_to_primary();
+                            // Record mouse up
+                            if let Some(recorder) = &mut self.recorder {
+                                recorder.record_mouse_up();
+                            }
                         }
                     }
                 }
@@ -1044,15 +1072,27 @@ impl ApplicationHandler for App {
                     }
                     RobotCommand::MoveTo { x, y } => {
                         app.set_cursor(x, y);
+                        // Record for robot test generation
+                        if let Some(recorder) = &mut self.recorder {
+                            recorder.record_mouse_move(x, y);
+                        }
                         window.request_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MouseDown => {
                         app.pointer_pressed();
+                        // Record for robot test generation
+                        if let Some(recorder) = &mut self.recorder {
+                            recorder.record_mouse_down();
+                        }
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MouseUp => {
                         app.pointer_released();
+                        // Record for robot test generation
+                        if let Some(recorder) = &mut self.recorder {
+                            recorder.record_mouse_up();
+                        }
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
 

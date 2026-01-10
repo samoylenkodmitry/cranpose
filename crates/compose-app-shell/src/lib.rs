@@ -1,6 +1,12 @@
 #![allow(clippy::type_complexity)]
 
+mod fps_monitor;
 mod hit_path_tracker;
+
+// Re-export FPS monitoring API
+pub use fps_monitor::{
+    current_fps, fps_display, fps_display_detailed, fps_stats, record_recomposition, FpsStats,
+};
 
 use std::fmt::Debug;
 // Use web_time for cross-platform time support (native + WASM) - compatible with winit
@@ -55,6 +61,22 @@ where
     /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     clipboard: Option<arboard::Clipboard>,
+    /// Dev options for debugging and performance monitoring
+    dev_options: DevOptions,
+}
+
+/// Development options for debugging and performance monitoring.
+/// 
+/// These are rendered directly by the renderer (not via composition)
+/// to avoid affecting performance measurements.
+#[derive(Clone, Debug, Default)]
+pub struct DevOptions {
+    /// Show FPS counter overlay
+    pub fps_counter: bool,
+    /// Show recomposition count
+    pub recomposition_counter: bool,
+    /// Show layout timing breakdown
+    pub layout_timing: bool,
 }
 
 impl<R> AppShell<R>
@@ -63,6 +85,9 @@ where
     R::Error: Debug,
 {
     pub fn new(mut renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
+        // Initialize FPS tracking
+        fps_monitor::init_fps_tracker();
+        
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
         let build = content;
@@ -87,9 +112,23 @@ where
             hit_path_tracker: HitPathTracker::new(),
             #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
             clipboard: arboard::Clipboard::new().ok(),
+            dev_options: DevOptions::default(),
         };
         shell.process_frame();
         shell
+    }
+
+    /// Set development options for debugging and performance monitoring.
+    /// 
+    /// The FPS counter and other overlays are rendered directly by the renderer
+    /// (not via composition) to avoid affecting performance measurements.
+    pub fn set_dev_options(&mut self, options: DevOptions) {
+        self.dev_options = options;
+    }
+
+    /// Get a reference to the current dev options.
+    pub fn dev_options(&self) -> &DevOptions {
+        &self.dev_options
     }
 
     pub fn set_viewport(&mut self, width: f32, height: f32) {
@@ -194,11 +233,17 @@ where
         self.runtime.drain_frame_callbacks(frame_time);
         self.runtime.runtime_handle().drain_ui();
         if self.composition.should_render() {
+            #[cfg(debug_assertions)]
+            eprintln!("[Update] should_render=true, calling process_invalid_scopes");
             match self.composition.process_invalid_scopes() {
                 Ok(changed) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[Update] process_invalid_scopes returned changed={}", changed);
                     if changed {
+                        fps_monitor::record_recomposition();
                         self.layout_dirty = true;
-                        // Request render invalidation so the scene gets rebuilt
+                        // Note: needs_measure bubbling now happens automatically in compose-core
+                        // when child nodes are inserted/removed during apply_commands
                         request_render_invalidation();
                     }
                 }
@@ -663,9 +708,40 @@ where
     }
 
     fn process_frame(&mut self) {
+        // Record frame for FPS tracking
+        fps_monitor::record_frame();
+        
+        #[cfg(debug_assertions)]
+        let frame_start = Instant::now();
+        
         self.run_layout_phase();
+        
+        #[cfg(debug_assertions)]
+        let after_layout = Instant::now();
+        
         self.run_dispatch_queues();
+        
+        #[cfg(debug_assertions)]
+        let after_dispatch = Instant::now();
+        
         self.run_render_phase();
+        
+        #[cfg(debug_assertions)]
+        {
+            let after_render = Instant::now();
+            let layout_ms = after_layout.duration_since(frame_start).as_secs_f64() * 1000.0;
+            let dispatch_ms = after_dispatch.duration_since(after_layout).as_secs_f64() * 1000.0;
+            let render_ms = after_render.duration_since(after_dispatch).as_secs_f64() * 1000.0;
+            let total_ms = after_render.duration_since(frame_start).as_secs_f64() * 1000.0;
+            
+            // Only log if frame took more than 8ms (120fps target)
+            if total_ms > 8.0 {
+                eprintln!(
+                    "[Frame] SLOW: total={:.1}ms (layout={:.1}ms, dispatch={:.1}ms, render={:.1}ms)",
+                    total_ms, layout_ms, dispatch_ms, render_ms
+                );
+            }
+        }
     }
 
     fn run_layout_phase(&mut self) {
@@ -677,14 +753,39 @@ where
         // Result: O(subtree) remeasurement, not O(app).
         let repass_nodes = compose_ui::take_layout_repass_nodes();
         let had_repass_nodes = !repass_nodes.is_empty();
+        #[cfg(debug_assertions)]
+        if had_repass_nodes {
+            eprintln!("[Layout] Processing {} repass nodes", repass_nodes.len());
+        }
         if had_repass_nodes {
             let mut applier = self.composition.applier_mut();
             for node_id in repass_nodes {
+                #[cfg(debug_assertions)]
+                eprintln!("[Layout REPASS] Processing node_id={}", node_id);
+                // Bubble measure dirty flags up to root so cache epoch increments.
+                // This uses the centralized function in compose-core.
+                compose_core::bubble_measure_dirty(
+                    &mut *applier as &mut dyn compose_core::Applier,
+                    node_id,
+                );
                 compose_core::bubble_layout_dirty(
                     &mut *applier as &mut dyn compose_core::Applier,
                     node_id,
                 );
             }
+            
+            // IMPORTANT: Also mark the actual root as needing measure.
+            // The bubble may not reach root if intermediate nodes (e.g., subcomposed slot roots
+            // from SubcomposeLayout) have broken parent chains. This ensures the epoch
+            // is incremented so SubcomposeLayout re-measures its items.
+            if let Some(root) = self.composition.root() {
+                if let Ok(node) = applier.get_mut(root) {
+                    node.mark_needs_measure();
+                    #[cfg(debug_assertions)]
+                    eprintln!("[Layout REPASS] Also marked actual root {} needs_measure", root);
+                }
+            }
+            
             drop(applier);
             self.layout_dirty = true;
         }
@@ -865,16 +966,24 @@ where
             return;
         }
         self.scene_dirty = false;
+        let viewport_size = Size {
+            width: self.viewport.0,
+            height: self.viewport.1,
+        };
         if let Some(layout_tree) = self.layout_tree.as_ref() {
-            let viewport_size = Size {
-                width: self.viewport.0,
-                height: self.viewport.1,
-            };
             if let Err(err) = self.renderer.rebuild_scene(layout_tree, viewport_size) {
                 log::error!("renderer rebuild failed: {err:?}");
             }
         } else {
             self.renderer.scene_mut().clear();
+        }
+        
+        // Draw FPS overlay if enabled (directly by renderer, no composition)
+        if self.dev_options.fps_counter {
+            let stats = fps_monitor::fps_stats();
+            let text = format!("{:.0} FPS | {:.1}ms | {} recomp/s", 
+                stats.fps, stats.avg_ms, stats.recomps_per_second);
+            self.renderer.draw_dev_overlay(&text, viewport_size);
         }
     }
 }

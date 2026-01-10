@@ -10,6 +10,7 @@ compose-core = { path = "../compose-core" }
 compose-macros = { path = "../compose-macros" }
 compose-runtime-std = { path = "../compose-runtime-std" }
 compose-foundation = { path = "../compose-foundation" }
+compose-animation = { path = "../compose-animation" }
 compose-ui-layout = { path = "../compose-ui-layout" }
 compose-ui-graphics = { path = "../compose-ui-graphics" }
 indexmap = "=2.7.1"

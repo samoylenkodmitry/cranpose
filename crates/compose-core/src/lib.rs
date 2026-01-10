@@ -24,8 +24,8 @@ pub use launched_effect::{
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler};
 pub use runtime::{
-    schedule_frame, schedule_node_update, DefaultScheduler, Runtime, RuntimeHandle, StateId,
-    TaskHandle,
+    current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,
+    RuntimeHandle, StateId, TaskHandle,
 };
 pub use snapshot_state_observer::SnapshotStateObserver;
 
@@ -890,6 +890,13 @@ pub trait Node: Any {
     fn needs_layout(&self) -> bool {
         false
     }
+    /// Mark this node as needing measure (size may have changed).
+    /// Called during bubbling when children are added/removed.
+    fn mark_needs_measure(&self) {}
+    /// Check if this node needs measure (for nodes with dirty flags).
+    fn needs_measure(&self) -> bool {
+        false
+    }
     /// Mark this node as needing semantics recomputation.
     fn mark_needs_semantics(&self) {}
     /// Check if this node needs semantics recomputation.
@@ -918,6 +925,20 @@ pub trait Node: Any {
 /// - Call from applier-level operations that modify the tree structure
 pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
     bubble_layout_dirty_applier(applier, node_id);
+}
+
+/// Unified API for bubbling measure dirty flags from a node to the root (Applier context).
+///
+/// Call this when a node's size may have changed (children added/removed, modifier changed).
+/// This ensures that measure_layout will increment the cache epoch and re-measure the subtree.
+///
+/// # Behavior
+/// 1. Marks the starting node as needing measure
+/// 2. Walks up the parent chain, marking each ancestor
+/// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
+/// 4. Stops at the root (node with no parent)
+pub fn bubble_measure_dirty(applier: &mut dyn Applier, node_id: NodeId) {
+    bubble_measure_dirty_applier(applier, node_id);
 }
 
 /// Unified API for bubbling semantics dirty flags from a node to the root (Applier context).
@@ -1006,6 +1027,58 @@ fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
                 }
             }
             None => break, // No parent, stop
+        }
+    }
+}
+
+/// Internal implementation for applier-based bubbling of measure dirtiness.
+fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
+    #[cfg(debug_assertions)]
+    eprintln!("[bubble_measure_dirty] Starting from node_id={}", node_id);
+    
+    // First, mark the starting node as needing measure
+    if let Ok(node) = applier.get_mut(node_id) {
+        node.mark_needs_measure();
+        #[cfg(debug_assertions)]
+        eprintln!("[bubble_measure_dirty] Marked node_id={} needs_measure={}", node_id, node.needs_measure());
+    }
+
+    // Then bubble up to ancestors
+    loop {
+        // Get parent of current node
+        let parent_id = match applier.get_mut(node_id) {
+            Ok(node) => node.parent(),
+            Err(_) => None,
+        };
+
+        #[cfg(debug_assertions)]
+        eprintln!("[bubble_measure_dirty] node_id={} -> parent_id={:?}", node_id, parent_id);
+
+        match parent_id {
+            Some(pid) => {
+                // Mark parent as needing measure
+                if let Ok(parent) = applier.get_mut(pid) {
+                    if !parent.needs_measure() {
+                        parent.mark_needs_measure();
+                        #[cfg(debug_assertions)]
+                        eprintln!("[bubble_measure_dirty] Marked parent_id={} needs_measure={}", pid, parent.needs_measure());
+                        node_id = pid; // Continue bubbling
+                    } else {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[bubble_measure_dirty] Parent {} already dirty, stopping", pid);
+                        break; // Already dirty, stop
+                    }
+                } else {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[bubble_measure_dirty] Failed to get parent {}", pid);
+                    break;
+                }
+            }
+            None => {
+                #[cfg(debug_assertions)]
+                eprintln!("[bubble_measure_dirty] Node {} has no parent, stopping at root", node_id);
+                break; // No parent, stop
+            }
         }
     }
 }
@@ -2251,6 +2324,7 @@ impl Composer {
                                 }
                                 // Bubble BEFORE clearing parent link so bubbling can verify consistency
                                 bubble_layout_dirty(applier, id);
+                                bubble_measure_dirty(applier, id);
                                 // Now clear parent link and unmount
                                 // Now clear parent link and unmount, but ONLY if we are still the parent.
                                 // If the node was reparented (moved to another node), we must not interfere.
@@ -2293,6 +2367,7 @@ impl Composer {
                                     // Bubble dirty flags to root after reordering
                                     // Even though parent doesn't change, layout needs recomputation
                                     bubble_layout_dirty(applier, id);
+                                    bubble_measure_dirty(applier, id);
                                     Ok(())
                                 }));
                         }
@@ -2312,6 +2387,7 @@ impl Composer {
                                 }
                                 // Bubble dirty flags to root after insertion
                                 bubble_layout_dirty(applier, id);
+                                bubble_measure_dirty(applier, id);
                                 Ok(())
                             }));
                         if insert_index != appended_index {
@@ -2618,6 +2694,23 @@ impl<T: Clone + 'static> MutableState<T> {
 
     pub fn get(&self) -> T {
         self.value()
+    }
+
+    /// Gets the current value WITHOUT subscribing to recomposition.
+    ///
+    /// Use this in layout/measure/draw phases to read state without causing
+    /// the current composition scope to recompose when the state changes.
+    ///
+    /// # When to use
+    /// - In modifier nodes (like ScrollNode) during measure()
+    /// - In any layout phase code that reads state but shouldn't trigger recomposition
+    ///
+    /// # When NOT to use
+    /// - In composable functions that should update when state changes
+    /// - When you want reactive UI updates
+    pub fn get_non_reactive(&self) -> T {
+        // Skip subscribe_current_scope() - just read the value directly
+        self.with_inner(|inner| inner.state.get())
     }
 
     #[cfg(test)]
@@ -3092,6 +3185,14 @@ impl<A: Applier + 'static> Composition<A> {
         Ok(())
     }
 
+    /// Returns true if composition needs to process invalid scopes (recompose).
+    ///
+    /// This checks both:
+    /// - `has_updates()`: composition scopes that were invalidated by state changes
+    /// - `needs_frame()`: animation callbacks that may have pending work
+    ///
+    /// Note: For scroll performance, ensure scroll state changes use Cell<T> instead
+    /// of MutableState<T> to avoid triggering recomposition on every scroll frame.
     pub fn should_render(&self) -> bool {
         self.runtime.needs_frame() || self.runtime.has_updates()
     }

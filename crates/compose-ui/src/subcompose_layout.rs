@@ -623,6 +623,15 @@ impl compose_core::Node for SubcomposeLayoutNode {
         self.needs_layout.get()
     }
 
+    fn mark_needs_measure(&self) {
+        self.needs_measure.set(true);
+        self.needs_layout.set(true); // Measure implies layout
+    }
+
+    fn needs_measure(&self) -> bool {
+        self.needs_measure.get()
+    }
+
     fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
     }

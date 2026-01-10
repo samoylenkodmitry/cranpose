@@ -7,6 +7,7 @@ pub use compose_macros::composable;
 mod cursor_animation;
 mod debug;
 mod draw;
+pub mod fling_animation;
 mod focus_dispatch;
 mod key_event;
 pub mod layout;

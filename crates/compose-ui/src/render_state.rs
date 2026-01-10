@@ -62,6 +62,10 @@ pub fn schedule_layout_repass(node_id: NodeId) {
     // The app shell will check take_layout_repass_nodes() first (scoped path),
     // and only falls back to global invalidation if the flag is set without any repass nodes.
     LAYOUT_INVALIDATED.store(true, Ordering::Relaxed);
+    // Also request render invalidation so the frame is actually drawn.
+    // Without this, programmatic scrolls (e.g., scroll_to_item) wouldn't trigger a redraw
+    // until the next user interaction caused a frame request.
+    request_render_invalidation();
 }
 
 /// Returns true if any layout repasses are pending.

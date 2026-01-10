@@ -316,3 +316,68 @@ required-features = ["robot-app"]
 name = "robot_lazy_scroll_edge_cases"
 path = "robot-runners/robot_lazy_scroll_edge_cases.rs"
 required-features = ["robot-app"]
+
+[[example]]
+name = "robot_fling"
+path = "robot-runners/robot_fling.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_fling_precise"
+path = "robot-runners/robot_fling_precise.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_scroll_jump"
+path = "robot-runners/robot_scroll_jump.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_test_recorder"
+path = "robot-runners/robot_test_recorder.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "scroll_reproduce_recording"
+path = "robot-runners/scroll_reproduce_recording.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_scroll_persistence"
+path = "robot-runners/robot_scroll_persistence.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "no_fling_recording"
+path = "robot-runners/no_fling_recording.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_fling_edge_cases"
+path = "robot-runners/robot_fling_edge_cases.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_scroll_visual"
+path = "robot-runners/robot_scroll_visual.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_tabbar_drag"
+path = "robot-runners/robot_tabbar_drag.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_modifier_render"
+path = "robot-runners/robot_modifier_render.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_scroll_to_item_redraw"
+path = "robot-runners/robot_scroll_to_item_redraw.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_lazylist_redraw_bug"
+path = "robot-runners/robot_lazylist_redraw_bug.rs"
+required-features = ["robot-app"]

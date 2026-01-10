@@ -659,6 +659,7 @@ dependencies = [
 name = "compose-ui"
 version = "0.1.0"
 dependencies = [
+ "compose-animation",
  "compose-core",
  "compose-foundation",
  "compose-macros",

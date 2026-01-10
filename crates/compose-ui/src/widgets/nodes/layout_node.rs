@@ -205,6 +205,15 @@ impl LayoutNode {
         self.modifier = modifier;
         self.sync_modifier_chain();
         if modifier_changed {
+            #[cfg(debug_assertions)]
+            {
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static SET_MOD_CLEAR_COUNT: AtomicU64 = AtomicU64::new(0);
+                let count = SET_MOD_CLEAR_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count % 50 == 0 {
+                    eprintln!("[LayoutNode] set_modifier cleared cache (modifier changed): count={}", count + 1);
+                }
+            }
             self.cache.clear();
             self.mark_needs_measure();
             self.request_semantics_update();
@@ -598,6 +607,15 @@ impl Node for LayoutNode {
 
     fn needs_layout(&self) -> bool {
         self.needs_layout.get()
+    }
+
+    fn mark_needs_measure(&self) {
+        self.needs_measure.set(true);
+        self.needs_layout.set(true);
+    }
+
+    fn needs_measure(&self) -> bool {
+        self.needs_measure.get()
     }
 
     fn mark_needs_semantics(&self) {

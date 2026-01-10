@@ -504,12 +504,20 @@ pub fn measure_layout(
         max_height: max_size.height,
     };
 
-    // Selective measure: only increment epoch if something needs measuring
+    // Selective measure: only increment epoch if something needs MEASURING (not just layout)
     // O(1) check - just look at root's dirty flag (bubbling ensures correctness)
-    let (needs_measure, _needs_semantics, cached_epoch) =
+    // 
+    // CRITICAL: We check needs_MEASURE, not needs_LAYOUT!
+    // - needs_measure: size may change, caches must be invalidated
+    // - needs_layout: position may change but size is cached (e.g., scroll)
+    // 
+    // Scroll operations bubble needs_layout to ancestors, but NOT needs_measure.
+    // Using needs_layout here would wipe ALL caches on every scroll frame, causing
+    // O(N) full remeasurement instead of O(changed nodes).
+    let (needs_remeasure, _needs_semantics, cached_epoch) =
         match applier.with_node::<LayoutNode, _>(root, |node| {
             (
-                node.needs_layout(),
+                node.needs_measure(),  // CORRECT: check needs_measure, not needs_layout
                 node.needs_semantics(),
                 node.cache_handles().epoch(),
             )
@@ -517,16 +525,22 @@ pub fn measure_layout(
             Ok(tuple) => tuple,
             Err(NodeError::TypeMismatch { .. }) => {
                 let node = applier.get_mut(root)?;
-                let layout_dirty = node.needs_layout();
+                // For non-LayoutNode roots, check needs_layout as fallback
+                let measure_dirty = node.needs_layout();
                 let semantics_dirty = node.needs_semantics();
-                (layout_dirty, semantics_dirty, 0)
+                (measure_dirty, semantics_dirty, 0)
             }
             Err(err) => return Err(err),
         };
 
-    let epoch = if needs_measure {
+
+    let epoch = if needs_remeasure {
+        #[cfg(debug_assertions)]
+        eprintln!("[Epoch] INCREMENTING - root.needs_measure()=true, old cached_epoch={}", cached_epoch);
         NEXT_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
     } else if cached_epoch != 0 {
+        #[cfg(debug_assertions)]
+        eprintln!("[Epoch] REUSING cached epoch={} - root.needs_measure()=false", cached_epoch);
         cached_epoch
     } else {
         // Fallback when caller root isn't a LayoutNode (e.g. tests using Spacer directly).
@@ -552,7 +566,13 @@ pub fn measure_layout(
     // ---- Measurement -------------------------------------------------------
     // If measurement fails, the guard will restore slots from the shared handle
     // on drop - this is safe because the handle always contains valid slots.
+    #[cfg(debug_assertions)]
+    let measure_start = web_time::Instant::now();
+    
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
+
+    #[cfg(debug_assertions)]
+    let after_measure = web_time::Instant::now();
 
     // ---- Metadata ----------------------------------------------------------
     let metadata = {
@@ -560,11 +580,17 @@ pub fn measure_layout(
         collect_runtime_metadata(&mut applier_ref, &measured)?
     };
 
+    #[cfg(debug_assertions)]
+    let after_metadata = web_time::Instant::now();
+
     // ---- Semantics snapshot ------------------------------------------------
     let semantics_snapshot = {
         let mut applier_ref = applier_host.borrow_typed();
         collect_semantics_snapshot(&mut applier_ref, &measured)?
     };
+
+    #[cfg(debug_assertions)]
+    let after_semantics = web_time::Instant::now();
 
     // Drop builder before guard - slots are already in the shared handle.
     // Guard's Drop will write them back to the applier.
@@ -577,6 +603,23 @@ pub fn measure_layout(
     let semantics_root = build_semantics_node(&measured, &metadata, &semantics_snapshot);
     let semantics = SemanticsTree::new(semantics_root);
     let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
+
+    #[cfg(debug_assertions)]
+    {
+        let after_tree = web_time::Instant::now();
+        let measure_ms = after_measure.duration_since(measure_start).as_secs_f64() * 1000.0;
+        let metadata_ms = after_metadata.duration_since(after_measure).as_secs_f64() * 1000.0;
+        let semantics_ms = after_semantics.duration_since(after_metadata).as_secs_f64() * 1000.0;
+        let tree_ms = after_tree.duration_since(after_semantics).as_secs_f64() * 1000.0;
+        let total_ms = after_tree.duration_since(measure_start).as_secs_f64() * 1000.0;
+        
+        if total_ms > 5.0 {
+            eprintln!(
+                "[Layout] measure_layout: {:.1}ms (measure={:.1}, metadata={:.1}, semantics={:.1}, tree={:.1})",
+                total_ms, measure_ms, metadata_ms, semantics_ms, tree_ms
+            );
+        }
+    }
 
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
 }
@@ -1052,21 +1095,65 @@ impl LayoutBuilderState {
         // Selective measure: if node doesn't need measure and we have a cached result, use it
         if !needs_measure {
             if let Some(cached) = cache.get_measurement(constraints) {
+                #[cfg(debug_assertions)]
+                {
+                    use std::sync::atomic::{AtomicU64, Ordering};
+                    static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+                    let count = CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                    if count % 100 == 0 {
+                        eprintln!("[Layout] cache HITS: {}", count + 1);
+                    }
+                }
                 return Ok(cached);
+            }
+        } else {
+            // Node has needs_measure=true, log why
+            #[cfg(debug_assertions)]
+            {
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static MEASURE_NEEDED_COUNT: AtomicU64 = AtomicU64::new(0);
+                let count = MEASURE_NEEDED_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count % 100 == 0 {
+                    eprintln!("[Layout] nodes with needs_measure=true: {}", count + 1);
+                }
             }
         }
 
-        // Otherwise check cache normally (for different constraints)
-        if let Some(cached) = cache.get_measurement(constraints) {
-            // Clear dirty flag after successful measure
-            Self::with_applier_result(&state_rc, |applier| {
-                applier.with_node::<LayoutNode, _>(node_id, |node| {
-                    node.clear_needs_measure();
-                    node.clear_needs_layout();
+        // Only check cache if not marked as needing measure.
+        // When needs_measure=true, we MUST re-run measure() even if constraints match,
+        // because something else changed (e.g., scroll offset, modifier state).
+        if !needs_measure {
+            // Check cache for current constraints
+            if let Some(cached) = cache.get_measurement(constraints) {
+                // Clear dirty flag after successful cache hit
+                Self::with_applier_result(&state_rc, |applier| {
+                    applier.with_node::<LayoutNode, _>(node_id, |node| {
+                        node.clear_needs_measure();
+                        node.clear_needs_layout();
+                    })
                 })
-            })
-            .ok();
-            return Ok(cached);
+                .ok();
+                #[cfg(debug_assertions)]
+                {
+                    use std::sync::atomic::{AtomicU64, Ordering};
+                    static PARTIAL_HITS: AtomicU64 = AtomicU64::new(0);
+                    let count = PARTIAL_HITS.fetch_add(1, Ordering::Relaxed);
+                    if count % 100 == 0 {
+                        eprintln!("[Layout] partial cache hits (same constraints): {}", count + 1);
+                    }
+                }
+                return Ok(cached);
+            }
+        }
+        
+        #[cfg(debug_assertions)]
+        {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+            let count = CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+            if count % 100 == 0 {
+                eprintln!("[Layout] cache MISSES (full remeasure): {}", count + 1);
+            }
         }
 
         let (runtime_handle, applier_host) = {
