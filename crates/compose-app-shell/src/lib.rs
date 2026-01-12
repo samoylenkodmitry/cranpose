@@ -247,8 +247,16 @@ where
                     if changed {
                         fps_monitor::record_recomposition();
                         self.layout_dirty = true;
-                        // Note: needs_measure bubbling now happens automatically in compose-core
-                        // when child nodes are inserted/removed during apply_commands
+                        // Force root needs_measure since bubbling may fail for
+                        // subcomposition nodes with broken parent chains (node 226 issue)
+                        if let Some(root_id) = self.composition.root() {
+                            let _ = self
+                                .composition
+                                .applier_mut()
+                                .with_node::<LayoutNode, _>(root_id, |node| {
+                                    node.mark_needs_measure();
+                                });
+                        }
                         request_render_invalidation();
                     }
                 }
