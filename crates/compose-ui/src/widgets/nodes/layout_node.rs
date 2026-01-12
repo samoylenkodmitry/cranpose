@@ -308,10 +308,11 @@ impl LayoutNode {
 
     /// Mark this node as needing redraw without forcing measure/layout.
     pub fn mark_needs_redraw(&self) {
-        let already_dirty = self.needs_redraw.replace(true);
-        if !already_dirty {
-            crate::request_render_invalidation();
+        self.needs_redraw.set(true);
+        if let Some(id) = self.id.get() {
+            crate::schedule_draw_repass(id);
         }
+        crate::request_render_invalidation();
     }
 
     /// Check if this node needs measure.
@@ -342,6 +343,10 @@ impl LayoutNode {
     /// Returns true when this node requested a redraw since the last render pass.
     pub fn needs_redraw(&self) -> bool {
         self.needs_redraw.get()
+    }
+
+    pub fn clear_needs_redraw(&self) {
+        self.needs_redraw.set(false);
     }
 
     fn request_semantics_update(&self) {
@@ -434,7 +439,7 @@ impl LayoutNode {
         self.cache.clone()
     }
 
-    pub(crate) fn resolved_modifiers(&self) -> ResolvedModifiers {
+    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.resolved_modifiers
     }
 
@@ -548,6 +553,16 @@ impl Clone for LayoutNode {
 }
 
 impl Node for LayoutNode {
+    fn mount(&mut self) {
+        let (chain, mut context) = self.modifier_chain.chain_and_context_mut();
+        chain.repair_chain();
+        chain.attach_nodes(&mut *context);
+    }
+
+    fn unmount(&mut self) {
+        self.modifier_chain.chain_mut().detach_nodes();
+    }
+
     fn set_node_id(&mut self, id: NodeId) {
         // Delegate to inherent method to ensure proper registration and chain updates
         LayoutNode::set_node_id(self, id);

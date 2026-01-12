@@ -406,10 +406,11 @@ impl SubcomposeLayoutNode {
 
     /// Mark this node as needing redraw without forcing measure/layout.
     pub fn mark_needs_redraw(&self) {
-        let already_dirty = self.needs_redraw.replace(true);
-        if !already_dirty {
-            crate::request_render_invalidation();
+        self.needs_redraw.set(true);
+        if let Some(id) = self.id.get() {
+            crate::schedule_draw_repass(id);
         }
+        crate::request_render_invalidation();
     }
 
     /// Check if this node needs measure.
@@ -430,6 +431,10 @@ impl SubcomposeLayoutNode {
     /// Returns true when this node requested a redraw since the last render pass.
     pub fn needs_redraw(&self) -> bool {
         self.needs_redraw.get()
+    }
+
+    pub fn clear_needs_redraw(&self) {
+        self.needs_redraw.set(false);
     }
 
     /// Marks this node as needing a fresh pointer-input pass.
@@ -564,6 +569,21 @@ impl SubcomposeLayoutNode {
 }
 
 impl compose_core::Node for SubcomposeLayoutNode {
+    fn mount(&mut self) {
+        let mut inner = self.inner.borrow_mut();
+        let (chain, mut context) = inner.modifier_chain.chain_and_context_mut();
+        chain.repair_chain();
+        chain.attach_nodes(&mut *context);
+    }
+
+    fn unmount(&mut self) {
+        self.inner
+            .borrow_mut()
+            .modifier_chain
+            .chain_mut()
+            .detach_nodes();
+    }
+
     fn insert_child(&mut self, child: NodeId) {
         self.inner.borrow_mut().children.insert(child);
     }
@@ -601,6 +621,7 @@ impl compose_core::Node for SubcomposeLayoutNode {
 
     fn set_node_id(&mut self, id: NodeId) {
         self.id.set(Some(id));
+        self.inner.borrow_mut().modifier_chain.set_node_id(Some(id));
     }
 
     fn on_attached_to_parent(&mut self, parent: NodeId) {

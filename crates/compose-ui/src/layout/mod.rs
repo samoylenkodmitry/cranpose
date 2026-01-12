@@ -322,6 +322,10 @@ impl LayoutTree {
         &self.root
     }
 
+    pub fn root_mut(&mut self) -> &mut LayoutBox {
+        &mut self.root
+    }
+
     pub fn into_root(self) -> LayoutBox {
         self.root
     }

@@ -13,7 +13,7 @@ use desktop_app::app;
 use std::path::PathBuf;
 
 fn main() {
-    let recording_path = PathBuf::from("no_fling_recording.rs");
+    let recording_path = PathBuf::from("absent_gradient_area_recording.rs");
 
     println!("=== Recorder Test ===");
     println!("Recording to: {:?}", recording_path);

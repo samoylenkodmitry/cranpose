@@ -12,7 +12,7 @@ pub mod text;
 pub mod velocity_tracker;
 
 // Re-export gesture constants at crate root for convenience
-pub use gesture_constants::DRAG_THRESHOLD;
+pub use gesture_constants::{DRAG_THRESHOLD, MAX_FLING_VELOCITY};
 pub use velocity_tracker::VelocityTracker1D;
 
 // Re-export commonly used items

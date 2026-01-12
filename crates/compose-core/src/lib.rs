@@ -172,6 +172,7 @@ pub(crate) struct RecomposeScopeInner {
     pending_recompose: Cell<bool>,
     force_reuse: Cell<bool>,
     force_recompose: Cell<bool>,
+    parent_hint: Cell<Option<NodeId>>,
     recompose: RefCell<Option<RecomposeCallback>>,
     local_stack: RefCell<Vec<LocalContext>>,
 }
@@ -187,6 +188,7 @@ impl RecomposeScopeInner {
             pending_recompose: Cell::new(false),
             force_reuse: Cell::new(false),
             force_recompose: Cell::new(false),
+            parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
             local_stack: RefCell::new(Vec::new()),
         }
@@ -278,6 +280,14 @@ impl RecomposeScope {
 
     fn local_stack(&self) -> Vec<LocalContext> {
         self.inner.local_stack.borrow().clone()
+    }
+
+    fn set_parent_hint(&self, parent: Option<NodeId>) {
+        self.inner.parent_hint.set(parent);
+    }
+
+    fn parent_hint(&self) -> Option<NodeId> {
+        self.inner.parent_hint.get()
     }
 
     pub fn deactivate(&self) {
@@ -1455,6 +1465,7 @@ pub(crate) struct ComposerCore {
     pending_scope_options: RefCell<Option<RecomposeOptions>>,
     phase: Cell<Phase>,
     last_node_reused: Cell<Option<bool>>,
+    recompose_parent_hint: Cell<Option<NodeId>>,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -1482,6 +1493,7 @@ impl ComposerCore {
             pending_scope_options: RefCell::new(None),
             phase: Cell::new(Phase::Compose),
             last_node_reused: Cell::new(None),
+            recompose_parent_hint: Cell::new(None),
             _not_send: PhantomData,
         }
     }
@@ -1669,6 +1681,10 @@ impl Composer {
         {
             let locals = self.core.local_stack.borrow();
             scope_ref.snapshot_locals(&locals);
+        }
+        {
+            let parent_hint = self.parent_stack().last().map(|frame| frame.id);
+            scope_ref.set_parent_hint(parent_hint);
         }
 
         let result = self.observe_scope(&scope_ref, || f(self));
@@ -2055,6 +2071,20 @@ impl Composer {
     fn recompose_group(&self, scope: &RecomposeScope) {
         let started = self.with_slots_mut(|slots| slots.begin_recompose_at_scope(scope.id()));
         if started.is_some() {
+            let previous_hint = self.core.recompose_parent_hint.replace(scope.parent_hint());
+            struct HintGuard {
+                core: Rc<ComposerCore>,
+                previous: Option<NodeId>,
+            }
+            impl Drop for HintGuard {
+                fn drop(&mut self) {
+                    self.core.recompose_parent_hint.set(self.previous);
+                }
+            }
+            let _hint_guard = HintGuard {
+                core: self.clone_core(),
+                previous: previous_hint,
+            };
             {
                 let mut stack = self.scope_stack();
                 stack.push(scope.clone());
@@ -2247,6 +2277,36 @@ impl Composer {
             return;
         }
 
+        // During recomposition, preserve the original parent when possible.
+        if let Some(parent_hint) = self.core.recompose_parent_hint.get() {
+            let parent_status = {
+                let mut applier = self.borrow_applier();
+                applier
+                    .get_mut(id)
+                    .map(|node| node.parent())
+                    .unwrap_or(None)
+            };
+            match parent_status {
+                Some(existing) if existing == parent_hint => {}
+                None => {
+                    self.commands_mut()
+                        .push(Box::new(move |applier: &mut dyn Applier| {
+                            if let Ok(parent_node) = applier.get_mut(parent_hint) {
+                                parent_node.insert_child(id);
+                            }
+                            if let Ok(child_node) = applier.get_mut(id) {
+                                child_node.on_attached_to_parent(parent_hint);
+                            }
+                            bubble_layout_dirty(applier, parent_hint);
+                            bubble_measure_dirty(applier, parent_hint);
+                            Ok(())
+                        }));
+                }
+                Some(_) => {}
+            }
+            return;
+        }
+
         // Neither parent nor subcompose - check if this node already has a parent.
         // During recomposition, reused nodes already have their correct parent from
         // initial composition. We should NOT set them as root, as that would corrupt
@@ -2342,16 +2402,22 @@ impl Composer {
                                 // Bubble BEFORE clearing parent link so bubbling can verify consistency
                                 bubble_layout_dirty(applier, id);
                                 bubble_measure_dirty(applier, id);
-                                // Now clear parent link and unmount
-                                // Now clear parent link and unmount, but ONLY if we are still the parent.
-                                // If the node was reparented (moved to another node), we must not interfere.
+                                // Now clear parent link and unmount. Remove if we still own the
+                                // node OR if it is orphaned (parent=None). Only skip removal
+                                // when the node has been reparented elsewhere.
                                 let should_remove = if let Ok(node) = applier.get_mut(child) {
-                                    if node.parent() == Some(id) {
-                                        node.on_removed_from_parent();
-                                        node.unmount();
-                                        true
-                                    } else {
-                                        false
+                                    match node.parent() {
+                                        Some(parent_id) if parent_id == id => {
+                                            node.on_removed_from_parent();
+                                            node.unmount();
+                                            true
+                                        }
+                                        None => {
+                                            // Orphaned node: remove to prevent stale roots.
+                                            node.unmount();
+                                            true
+                                        }
+                                        Some(_) => false,
                                     }
                                 } else {
                                     true
@@ -2394,6 +2460,23 @@ impl Composer {
                         current.insert(insert_index, child);
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
+                                // If the child is currently attached to a different parent,
+                                // detach it from the old parent before reparenting.
+                                let old_parent =
+                                    applier.get_mut(child).ok().and_then(|node| node.parent());
+                                if let Some(old_parent_id) = old_parent {
+                                    if old_parent_id != id {
+                                        if let Ok(old_parent_node) = applier.get_mut(old_parent_id)
+                                        {
+                                            old_parent_node.remove_child(child);
+                                        }
+                                        if let Ok(child_node) = applier.get_mut(child) {
+                                            child_node.on_removed_from_parent();
+                                        }
+                                        bubble_layout_dirty(applier, old_parent_id);
+                                        bubble_measure_dirty(applier, old_parent_id);
+                                    }
+                                }
                                 // Insert child and set parent link atomically
                                 if let Ok(parent_node) = applier.get_mut(id) {
                                     parent_node.insert_child(child);
@@ -2420,24 +2503,58 @@ impl Composer {
                 }
             }
 
-            // Even if children didn't change, property changes (like set_modifier, set_measure_policy)
-            // may have marked this node dirty during composition. We need to bubble those changes too.
-            // This makes composable-level bubbling unnecessary.
-            if !children_changed {
-                self.commands_mut()
-                    .push(Box::new(move |applier: &mut dyn Applier| {
-                        // Check if node is dirty and bubble if so
-                        let is_dirty = if let Ok(node) = applier.get_mut(id) {
-                            node.needs_layout()
+            let expected_children = new_children.clone();
+            let needs_dirty_check = !children_changed;
+            self.commands_mut()
+                .push(Box::new(move |applier: &mut dyn Applier| {
+                    let mut repaired = false;
+                    for &child in &expected_children {
+                        let needs_attach = if let Ok(node) = applier.get_mut(child) {
+                            node.parent() != Some(id)
                         } else {
                             false
                         };
-                        if is_dirty {
-                            bubble_layout_dirty(applier, id);
+                        if needs_attach {
+                            let old_parent =
+                                applier.get_mut(child).ok().and_then(|node| node.parent());
+                            if let Some(old_parent_id) = old_parent {
+                                if old_parent_id != id {
+                                    if let Ok(old_parent_node) = applier.get_mut(old_parent_id) {
+                                        old_parent_node.remove_child(child);
+                                    }
+                                    if let Ok(child_node) = applier.get_mut(child) {
+                                        child_node.on_removed_from_parent();
+                                    }
+                                    bubble_layout_dirty(applier, old_parent_id);
+                                    bubble_measure_dirty(applier, old_parent_id);
+                                }
+                            }
+                            if let Ok(parent_node) = applier.get_mut(id) {
+                                parent_node.insert_child(child);
+                            }
+                            if let Ok(child_node) = applier.get_mut(child) {
+                                child_node.on_attached_to_parent(id);
+                            }
+                            repaired = true;
                         }
-                        Ok(())
-                    }));
-            }
+                    }
+                    let is_dirty = if needs_dirty_check {
+                        if let Ok(node) = applier.get_mut(id) {
+                            node.needs_layout()
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if repaired {
+                        bubble_layout_dirty(applier, id);
+                        bubble_measure_dirty(applier, id);
+                    } else if is_dirty {
+                        bubble_layout_dirty(applier, id);
+                    }
+                    Ok(())
+                }));
 
             remembered.update(|entry| entry.children = new_children);
         }

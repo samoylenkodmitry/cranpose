@@ -241,8 +241,8 @@ fn main() {
                 // Release
                 let _ = robot.mouse_up();
 
-                // Wait for fling to complete (longer for animation)
-                std::thread::sleep(Duration::from_millis(500));
+                // Wait for fling to complete (ensures full momentum before measuring)
+                let _ = robot.wait_for_idle();
 
                 // Check: Item 0 should have moved significantly more than just the drag distance
                 // (Because fling adds momentum)
@@ -274,7 +274,7 @@ fn main() {
             // =========================================================
             test!("Repeated scrolls no jump-back", {
                 // Wait for any animation to finish
-                std::thread::sleep(Duration::from_millis(300));
+                let _ = robot.wait_for_idle();
 
                 // Find any visible item
                 // Do first scroll
@@ -286,6 +286,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(30));
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(300));
+                let _ = robot.wait_for_idle();
 
                 // Record position after first scroll
                 let after_first = find_any_item(&robot);

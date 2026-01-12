@@ -14,7 +14,7 @@ use web_time::Instant;
 
 use compose_core::{
     enter_event_handler, exit_event_handler, location_key, run_in_mutable_snapshot, Applier,
-    Composition, Key, MemoryApplier, NodeError,
+    Composition, Key, MemoryApplier, NodeError, NodeId,
 };
 use compose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use compose_render_common::{HitTestTarget, RenderScene, Renderer};
@@ -23,12 +23,14 @@ use compose_ui::{
     has_pending_focus_invalidations, has_pending_pointer_repasses, log_layout_tree,
     log_render_scene, log_screen_summary, peek_focus_invalidation, peek_layout_invalidation,
     peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
-    process_pointer_repasses, request_render_invalidation, take_focus_invalidation,
-    take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
-    HeadlessRenderer, LayoutNode, LayoutTree, SemanticsTree,
+    process_pointer_repasses, request_render_invalidation, take_draw_repass_nodes,
+    take_focus_invalidation, take_layout_invalidation, take_pointer_invalidation,
+    take_render_invalidation, HeadlessRenderer, LayoutNode, LayoutTree, SemanticsTree,
+    SubcomposeLayoutNode,
 };
 use compose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
+use std::collections::HashSet;
 
 // Re-export key event types for use by compose-app
 pub use compose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
@@ -960,6 +962,21 @@ where
         }
     }
 
+    fn refresh_draw_repasses(&mut self) {
+        let dirty_nodes = take_draw_repass_nodes();
+        if dirty_nodes.is_empty() {
+            return;
+        }
+
+        let Some(layout_tree) = self.layout_tree.as_mut() else {
+            return;
+        };
+
+        let dirty_set: HashSet<NodeId> = dirty_nodes.into_iter().collect();
+        let mut applier = self.composition.applier_mut();
+        refresh_layout_box_data(&mut applier, layout_tree.root_mut(), &dirty_set);
+    }
+
     fn run_render_phase(&mut self) {
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
@@ -973,6 +990,7 @@ where
             return;
         }
         self.scene_dirty = false;
+        self.refresh_draw_repasses();
         let viewport_size = Size {
             width: self.viewport.0,
             height: self.viewport.1,
@@ -994,6 +1012,42 @@ where
             );
             self.renderer.draw_dev_overlay(&text, viewport_size);
         }
+    }
+}
+
+fn refresh_layout_box_data(
+    applier: &mut MemoryApplier,
+    layout: &mut compose_ui::layout::LayoutBox,
+    dirty_nodes: &HashSet<NodeId>,
+) {
+    if dirty_nodes.contains(&layout.node_id) {
+        if let Ok((modifier, resolved_modifiers, slices)) =
+            applier.with_node::<LayoutNode, _>(layout.node_id, |node| {
+                node.clear_needs_redraw();
+                (
+                    node.modifier.clone(),
+                    node.resolved_modifiers(),
+                    node.modifier_slices_snapshot(),
+                )
+            })
+        {
+            layout.node_data.modifier = modifier;
+            layout.node_data.resolved_modifiers = resolved_modifiers;
+            layout.node_data.modifier_slices = slices;
+        } else if let Ok((modifier, resolved_modifiers)) = applier
+            .with_node::<SubcomposeLayoutNode, _>(layout.node_id, |node| {
+                node.clear_needs_redraw();
+                (node.modifier(), node.resolved_modifiers())
+            })
+        {
+            layout.node_data.modifier = modifier.clone();
+            layout.node_data.resolved_modifiers = resolved_modifiers;
+            layout.node_data.modifier_slices = compose_ui::collect_slices_from_modifier(&modifier);
+        }
+    }
+
+    for child in &mut layout.children {
+        refresh_layout_box_data(applier, child, dirty_nodes);
     }
 }
 

@@ -10,7 +10,7 @@ const HISTORY_SIZE: usize = 20;
 const HORIZON_MS: i64 = 100;
 
 /// If no movement for this duration, assume the pointer has stopped.
-const ASSUME_STOPPED_MS: i64 = 40;
+pub const ASSUME_STOPPED_MS: i64 = 40;
 
 /// A data point with timestamp.
 #[derive(Clone, Copy, Default)]
@@ -68,7 +68,7 @@ impl VelocityTracker1D {
         }
     }
 
-    /// Adds a data point at the given time.
+    /// Adds a data point at the given time (milliseconds).
     ///
     /// For absolute tracking, `data_point` is the position.
     /// For differential tracking, `data_point` is the change since last point.
@@ -132,6 +132,20 @@ impl VelocityTracker1D {
             calculate_impulse_velocity(&data_points, &times, sample_count, self.is_differential);
 
         velocity_per_ms * 1000.0
+    }
+
+    /// Calculates the velocity in units/second, capped to `max_velocity`.
+    pub fn calculate_velocity_with_max(&self, max_velocity: f32) -> f32 {
+        if !max_velocity.is_finite() || max_velocity <= 0.0 {
+            return 0.0;
+        }
+
+        let velocity = self.calculate_velocity();
+        if velocity == 0.0 || velocity.is_nan() {
+            return 0.0;
+        }
+
+        velocity.clamp(-max_velocity, max_velocity)
     }
 
     /// Clears all tracked data.
@@ -248,6 +262,23 @@ mod tests {
     }
 
     #[test]
+    fn test_velocity_capped() {
+        let mut tracker = VelocityTracker1D::new();
+        tracker.add_data_point(0, 0.0);
+        tracker.add_data_point(1, 10_000.0);
+
+        let velocity = tracker.calculate_velocity_with_max(8_000.0);
+        assert_eq!(velocity, 8_000.0);
+
+        tracker.reset();
+        tracker.add_data_point(0, 10_000.0);
+        tracker.add_data_point(1, 0.0);
+
+        let velocity = tracker.calculate_velocity_with_max(8_000.0);
+        assert_eq!(velocity, -8_000.0);
+    }
+
+    #[test]
     fn test_old_samples_ignored() {
         let mut tracker = VelocityTracker1D::new();
         // Old sample (more than HORIZON_MS ago)
@@ -269,7 +300,7 @@ mod tests {
     fn test_gap_over_stopped_threshold_returns_zero() {
         let mut tracker = VelocityTracker1D::new();
         tracker.add_data_point(0, 0.0);
-        tracker.add_data_point(100, 100.0);
+        tracker.add_data_point(ASSUME_STOPPED_MS + 1, 100.0);
 
         let velocity = tracker.calculate_velocity();
         assert_eq!(velocity, 0.0);

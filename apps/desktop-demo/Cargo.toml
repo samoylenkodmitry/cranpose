@@ -356,6 +356,26 @@ path = "robot-runners/no_fling_recording.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_no_fling_recording2"
+path = "robot-runners/robot_no_fling_recording2.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "too_fast_fling_recording"
+path = "robot-runners/too_fast_fling_recording.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "absent_gradient_area_recording"
+path = "robot-runners/absent_gradient_area_recording.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_gradient_tab_switch"
+path = "robot-runners/robot_gradient_tab_switch.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_fling_edge_cases"
 path = "robot-runners/robot_fling_edge_cases.rs"
 required-features = ["robot-app"]

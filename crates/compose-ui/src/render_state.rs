@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 thread_local! {
     static LAYOUT_REPASS_MANAGER: RefCell<LayoutRepassManager> =
         RefCell::new(LayoutRepassManager::new());
+    static DRAW_REPASS_MANAGER: RefCell<DrawRepassManager> =
+        RefCell::new(DrawRepassManager::new());
 }
 
 /// Manages scoped layout invalidations for specific nodes.
@@ -17,6 +19,31 @@ struct LayoutRepassManager {
 }
 
 impl LayoutRepassManager {
+    fn new() -> Self {
+        Self {
+            dirty_nodes: HashSet::new(),
+        }
+    }
+
+    fn schedule_repass(&mut self, node_id: NodeId) {
+        self.dirty_nodes.insert(node_id);
+    }
+
+    fn has_pending_repass(&self) -> bool {
+        !self.dirty_nodes.is_empty()
+    }
+
+    fn take_dirty_nodes(&mut self) -> Vec<NodeId> {
+        self.dirty_nodes.drain().collect()
+    }
+}
+
+/// Tracks draw-only invalidations so render data can be refreshed without layout.
+struct DrawRepassManager {
+    dirty_nodes: HashSet<NodeId>,
+}
+
+impl DrawRepassManager {
     fn new() -> Self {
         Self {
             dirty_nodes: HashSet::new(),
@@ -66,6 +93,26 @@ pub fn schedule_layout_repass(node_id: NodeId) {
     // Without this, programmatic scrolls (e.g., scroll_to_item) wouldn't trigger a redraw
     // until the next user interaction caused a frame request.
     request_render_invalidation();
+}
+
+/// Schedules a draw-only repass for a specific node.
+///
+/// This ensures draw/pointer data stays in sync when modifier updates do not
+/// require a layout pass (e.g., draw-only modifier changes).
+pub fn schedule_draw_repass(node_id: NodeId) {
+    DRAW_REPASS_MANAGER.with(|manager| {
+        manager.borrow_mut().schedule_repass(node_id);
+    });
+}
+
+/// Returns true if any draw repasses are pending.
+pub fn has_pending_draw_repasses() -> bool {
+    DRAW_REPASS_MANAGER.with(|manager| manager.borrow().has_pending_repass())
+}
+
+/// Takes all pending draw repass node IDs.
+pub fn take_draw_repass_nodes() -> Vec<NodeId> {
+    DRAW_REPASS_MANAGER.with(|manager| manager.borrow_mut().take_dirty_nodes())
 }
 
 /// Returns true if any layout repasses are pending.

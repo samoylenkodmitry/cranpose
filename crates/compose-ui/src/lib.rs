@@ -78,10 +78,11 @@ pub use primitives::{
 pub use compose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 pub use render_state::{
-    current_density, has_pending_layout_repasses, peek_focus_invalidation,
-    peek_layout_invalidation, peek_pointer_invalidation, peek_render_invalidation,
-    request_focus_invalidation, request_layout_invalidation, request_pointer_invalidation,
-    request_render_invalidation, schedule_layout_repass, set_density, take_focus_invalidation,
+    current_density, has_pending_draw_repasses, has_pending_layout_repasses,
+    peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
+    peek_render_invalidation, request_focus_invalidation, request_layout_invalidation,
+    request_pointer_invalidation, request_render_invalidation, schedule_draw_repass,
+    schedule_layout_repass, set_density, take_draw_repass_nodes, take_focus_invalidation,
     take_layout_invalidation, take_layout_repass_nodes, take_pointer_invalidation,
     take_render_invalidation,
 };

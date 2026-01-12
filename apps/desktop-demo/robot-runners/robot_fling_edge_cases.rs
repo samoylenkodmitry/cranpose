@@ -6,15 +6,15 @@
 //! 3. Very slow scroll (should NOT trigger fling)
 //! 4. Fling interrupted by click (should cancel)
 //! 5. Direction reversal (fling up -> fling down)
-//! 6. Very fast fling (velocity capping at 3000px/s)
+//! 6. Very fast fling (velocity capped by MAX_FLING_VELOCITY)
 //!
 //! Run with:
 //! ```bash
 //! cargo run --package desktop-app --example robot_fling_edge_cases --features robot-app
 //! ```
 
-use compose_app::AppLauncher;
-use compose_testing::{find_button, find_in_semantics};
+use compose_app::{AppLauncher, Robot};
+use compose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
 
@@ -57,6 +57,21 @@ fn main() {
             let center_x = 400.0;
             let center_y = 350.0;
 
+            fn find_item_center_y(robot: &Robot, item_text: &str) -> Option<f32> {
+                find_in_semantics(robot, |elem| find_text(elem, item_text))
+                    .map(|(_x, y, _w, h)| y + h / 2.0)
+            }
+
+            fn find_any_item(robot: &Robot) -> Option<(String, f32)> {
+                for i in 0..30 {
+                    let item_text = format!("Item #{}", i);
+                    if let Some(center_y) = find_item_center_y(robot, &item_text) {
+                        return Some((item_text, center_y));
+                    }
+                }
+                None
+            }
+
             // =========================================================
             // TEST 1: Very slow scroll - should NOT trigger fling
             // =========================================================
@@ -87,7 +102,7 @@ fn main() {
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
 
-            // Fast swipe - 150px in 50ms = 3000px/sec
+            // Fast swipe - 150px in 50ms = 3000px/sec (below max cap)
             for i in 1..=5 {
                 let progress = i as f32 / 5.0;
                 let _ = robot.mouse_move(center_x, center_y - (150.0 * progress));
@@ -190,6 +205,14 @@ fn main() {
             // =========================================================
             println!("--- Test 7: Simulated Frame Drops ---");
 
+            let (tracked_label, _before_y) = match find_any_item(&robot) {
+                Some(value) => value,
+                None => {
+                    eprintln!("✗ Could not find a visible item before frame drop test");
+                    std::process::exit(1);
+                }
+            };
+
             let _ = robot.mouse_move(center_x, center_y);
             std::thread::sleep(Duration::from_millis(50));
             let _ = robot.mouse_down();
@@ -204,8 +227,29 @@ fn main() {
             std::thread::sleep(Duration::from_millis(10));
             let _ = robot.mouse_move(center_x, center_y - 130.0);
             let _ = robot.mouse_up();
-            std::thread::sleep(Duration::from_millis(400));
-            println!("  ✓ Frame drops - should still detect velocity (was the bug!)\n");
+            std::thread::sleep(Duration::from_millis(50));
+
+            let post_release_y = find_item_center_y(&robot, &tracked_label);
+            std::thread::sleep(Duration::from_millis(300));
+            let after_fling_y = find_item_center_y(&robot, &tracked_label);
+
+            match (post_release_y, after_fling_y) {
+                (Some(post_y), Some(after_y)) => {
+                    let additional = post_y - after_y;
+                    if additional < 15.0 {
+                        eprintln!(
+                            "✗ Frame drop fling too small: {:.1}px (expected > 15px)",
+                            additional
+                        );
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    // If the tracked item scrolled off-screen, momentum likely occurred.
+                }
+            }
+
+            println!("  ✓ Frame drops - fling momentum detected\n");
 
             // =========================================================
             // TEST 8: Zero movement then release

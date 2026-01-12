@@ -20,7 +20,10 @@ use crate::fling_animation::FlingAnimation;
 use crate::fling_animation::MIN_FLING_VELOCITY;
 use crate::scroll::{ScrollElement, ScrollState};
 use compose_core::current_runtime_handle;
-use compose_foundation::{PointerButton, PointerButtons, VelocityTracker1D, DRAG_THRESHOLD};
+use compose_foundation::{
+    velocity_tracker::ASSUME_STOPPED_MS, PointerButton, PointerButtons, VelocityTracker1D,
+    DRAG_THRESHOLD, MAX_FLING_VELOCITY,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 use web_time::Instant;
@@ -50,6 +53,9 @@ struct ScrollGestureState {
     /// Time when gesture down started (for velocity calculation).
     gesture_start_time: Option<Instant>,
 
+    /// Last time a velocity sample was recorded (milliseconds since gesture start).
+    last_velocity_sample_ms: Option<i64>,
+
     /// Current fling animation (if any).
     fling_animation: Option<FlingAnimation>,
 }
@@ -62,6 +68,7 @@ impl Default for ScrollGestureState {
             is_dragging: false,
             velocity_tracker: VelocityTracker1D::new(),
             gesture_start_time: None,
+            last_velocity_sample_ms: None,
             fling_animation: None,
         }
     }
@@ -253,6 +260,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             position.x
         };
         gs.velocity_tracker.add_data_point(0, pos);
+        gs.last_velocity_sample_ms = Some(0);
 
         // Never consume Down - we don't know if this is a drag yet
         false
@@ -276,6 +284,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             gs.drag_down_position = None;
             gs.last_position = None;
             gs.is_dragging = false;
+            gs.gesture_start_time = None;
+            gs.last_velocity_sample_ms = None;
+            gs.velocity_tracker.reset();
             return false;
         }
 
@@ -306,7 +317,25 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             } else {
                 position.x
             };
-            gs.velocity_tracker.add_data_point(elapsed_ms, pos);
+            // Keep sample times strictly increasing so velocity stays stable when
+            // multiple move events land in the same millisecond.
+            let sample_ms = match gs.last_velocity_sample_ms {
+                Some(last_sample_ms) => {
+                    let mut sample_ms = if elapsed_ms <= last_sample_ms {
+                        last_sample_ms + 1
+                    } else {
+                        elapsed_ms
+                    };
+                    // Clamp large processing gaps so frame stalls don't erase fling velocity.
+                    if sample_ms - last_sample_ms > ASSUME_STOPPED_MS {
+                        sample_ms = last_sample_ms + ASSUME_STOPPED_MS;
+                    }
+                    sample_ms
+                }
+                None => elapsed_ms,
+            };
+            gs.velocity_tracker.add_data_point(sample_ms, pos);
+            gs.last_velocity_sample_ms = Some(sample_ms);
         }
 
         if gs.is_dragging {
@@ -330,49 +359,58 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     /// velocity and starts fling animation if velocity is above threshold.
     ///
     /// Returns `true` if we were dragging (event should be consumed).
-    fn on_up(&self, position: Point) -> bool {
-        let mut gs = self.gesture_state.borrow_mut();
-        let was_dragging = gs.is_dragging;
+    fn finish_gesture(&self, allow_fling: bool) -> bool {
+        let (was_dragging, velocity, start_fling, existing_fling) = {
+            let mut gs = self.gesture_state.borrow_mut();
+            let was_dragging = gs.is_dragging;
+            let mut velocity = 0.0;
 
-        if let Some(start_time) = gs.gesture_start_time {
-            let elapsed_ms = start_time.elapsed().as_millis() as i64;
-            let pos = if self.is_vertical {
-                position.y
+            if allow_fling && was_dragging && gs.gesture_start_time.is_some() {
+                velocity = gs
+                    .velocity_tracker
+                    .calculate_velocity_with_max(MAX_FLING_VELOCITY);
+            }
+
+            #[cfg(debug_assertions)]
+            if allow_fling {
+                eprintln!(
+                    "[Fling] on_up: was_dragging={}, velocity={:.0}",
+                    was_dragging, velocity
+                );
             } else {
-                position.x
+                eprintln!("[Scroll] on_cancel: was_dragging={}", was_dragging);
+            }
+
+            let start_fling = allow_fling && was_dragging && velocity.abs() > MIN_FLING_VELOCITY;
+            let existing_fling = if start_fling {
+                gs.fling_animation.take()
+            } else {
+                None
             };
-            gs.velocity_tracker.add_data_point(elapsed_ms, pos);
-        }
 
-        // Calculate velocity for potential fling
-        let velocity = gs.velocity_tracker.calculate_velocity();
+            gs.drag_down_position = None;
+            gs.last_position = None;
+            gs.is_dragging = false;
+            gs.gesture_start_time = None;
+            gs.last_velocity_sample_ms = None;
 
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[Fling] on_up: was_dragging={}, velocity={:.0}",
-            was_dragging, velocity
-        );
-
-        gs.drag_down_position = None;
-        gs.last_position = None;
-        gs.is_dragging = false;
-        gs.gesture_start_time = None;
+            (was_dragging, velocity, start_fling, existing_fling)
+        };
 
         // Start fling animation if velocity is significant
-        if was_dragging && velocity.abs() > MIN_FLING_VELOCITY {
+        if start_fling {
             #[cfg(debug_assertions)]
             eprintln!(
                 "[Fling] Triggering fling with velocity: {:.1} px/sec",
                 velocity
             );
 
+            if let Some(old_fling) = existing_fling {
+                old_fling.cancel();
+            }
+
             // Get runtime handle for frame callbacks
             if let Some(runtime) = current_runtime_handle() {
-                // Cancel any existing fling
-                if let Some(old_fling) = gs.fling_animation.take() {
-                    old_fling.cancel();
-                }
-
                 let scroll_target = self.scroll_target.clone();
                 let reverse = self.reverse_scrolling;
                 let fling = FlingAnimation::new(runtime);
@@ -409,6 +447,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                     },
                 );
 
+                let mut gs = self.gesture_state.borrow_mut();
                 gs.fling_animation = Some(fling);
             }
         }
@@ -416,13 +455,21 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         was_dragging
     }
 
-    /// Handles pointer cancel event.
+    /// Handles pointer up event.
     ///
-    /// Same as Up - cleans up state and consumes if we were dragging.
+    /// Cleans up drag state. If we were actively dragging, calculates fling
+    /// velocity and starts fling animation if velocity is above threshold.
     ///
     /// Returns `true` if we were dragging (event should be consumed).
-    fn on_cancel(&self, position: Point) -> bool {
-        self.on_up(position)
+    fn on_up(&self) -> bool {
+        self.finish_gesture(true)
+    }
+
+    /// Handles pointer cancel event.
+    ///
+    /// Cleans up state without starting a fling. Returns `true` if we were dragging.
+    fn on_cancel(&self) -> bool {
+        self.finish_gesture(false)
     }
 }
 
@@ -502,8 +549,8 @@ fn scroll_impl(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -
                             PointerEventKind::Move => {
                                 detector.on_move(event.position, event.buttons)
                             }
-                            PointerEventKind::Up => detector.on_up(event.position),
-                            PointerEventKind::Cancel => detector.on_cancel(event.position),
+                            PointerEventKind::Up => detector.on_up(),
+                            PointerEventKind::Cancel => detector.on_cancel(),
                         };
 
                         if should_consume {
@@ -595,8 +642,8 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                             PointerEventKind::Move => {
                                 detector.on_move(event.position, event.buttons)
                             }
-                            PointerEventKind::Up => detector.on_up(event.position),
-                            PointerEventKind::Cancel => detector.on_cancel(event.position),
+                            PointerEventKind::Up => detector.on_up(),
+                            PointerEventKind::Cancel => detector.on_cancel(),
                         };
 
                         if should_consume {
