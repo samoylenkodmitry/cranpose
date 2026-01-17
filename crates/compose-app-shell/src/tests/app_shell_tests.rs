@@ -310,11 +310,13 @@ fn draw_repass_updates_render_data_without_layout() {
 
 fn find_rect_width(scene: &compose_ui::RecordedRenderScene, color: Color) -> Option<f32> {
     for op in scene.operations() {
-        if let RenderOp::Primitive { primitive, .. } = op {
-            if let DrawPrimitive::Rect { rect, brush } = primitive {
-                if *brush == Brush::solid(color) {
-                    return Some(rect.width);
-                }
+        if let RenderOp::Primitive {
+            primitive: DrawPrimitive::Rect { rect, brush },
+            ..
+        } = op
+        {
+            if *brush == Brush::solid(color) {
+                return Some(rect.width);
             }
         }
     }

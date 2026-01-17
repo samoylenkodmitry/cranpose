@@ -718,21 +718,19 @@ where
         fps_monitor::record_frame();
 
         #[cfg(debug_assertions)]
-        let frame_start = Instant::now();
+        let _frame_start = Instant::now();
 
         self.run_layout_phase();
 
         #[cfg(debug_assertions)]
-        let after_layout = Instant::now();
+        let _after_layout = Instant::now();
 
         self.run_dispatch_queues();
 
         #[cfg(debug_assertions)]
-        let after_dispatch = Instant::now();
+        let _after_dispatch = Instant::now();
 
         self.run_render_phase();
-
-
     }
 
     fn run_layout_phase(&mut self) {
@@ -745,12 +743,10 @@ where
         let repass_nodes = compose_ui::take_layout_repass_nodes();
         let had_repass_nodes = !repass_nodes.is_empty();
         #[cfg(debug_assertions)]
-
         if had_repass_nodes {
             let root = self.composition.root();
             let mut applier = self.composition.applier_mut();
             for node_id in repass_nodes {
-
                 // Bubble measure dirty flags up to root so cache epoch increments.
                 // This uses the centralized function in compose-core.
                 compose_core::bubble_measure_dirty(
@@ -770,7 +766,6 @@ where
             if let Some(root) = root {
                 if let Ok(node) = applier.get_mut(root) {
                     node.mark_needs_measure();
-
                 }
             }
 

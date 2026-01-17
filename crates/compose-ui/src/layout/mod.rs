@@ -566,10 +566,7 @@ pub fn measure_layout(
     // If measurement fails, the guard will restore slots from the shared handle
     // on drop - this is safe because the handle always contains valid slots.
 
-
     let measured = builder.measure_node(root, normalize_constraints(constraints))?;
-
-
 
     // ---- Metadata ----------------------------------------------------------
     let metadata = {
@@ -577,15 +574,11 @@ pub fn measure_layout(
         collect_runtime_metadata(&mut applier_ref, &measured)?
     };
 
-
-
     // ---- Semantics snapshot ------------------------------------------------
     let semantics_snapshot = {
         let mut applier_ref = applier_host.borrow_typed();
         collect_semantics_snapshot(&mut applier_ref, &measured)?
     };
-
-
 
     // Drop builder before guard - slots are already in the shared handle.
     // Guard's Drop will write them back to the applier.
@@ -598,8 +591,6 @@ pub fn measure_layout(
     let semantics_root = build_semantics_node(&measured, &metadata, &semantics_snapshot);
     let semantics = SemanticsTree::new(semantics_root);
     let layout_tree = build_layout_tree_from_metadata(&measured, &metadata);
-
-
 
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
 }
@@ -1088,8 +1079,6 @@ impl LayoutBuilderState {
                 return Ok(cached);
             }
         }
-
-
 
         let (runtime_handle, applier_host) = {
             let state = state_rc.borrow();

@@ -108,10 +108,8 @@ fn schedule_next_frame<F, G>(
                     on_end_fn,
                 );
             }
-        } else {
-            if let Some(end_fn) = on_end.borrow_mut().take() {
-                end_fn();
-            }
+        } else if let Some(end_fn) = on_end.borrow_mut().take() {
+            end_fn();
         }
     });
 
@@ -192,8 +190,6 @@ impl FlingAnimation {
         let calc = compose_animation::FlingCalculator::new(friction, density);
         let decay_spec = SplineBasedDecaySpec::with_calculator(calc);
 
-
-
         let anim_state = FlingAnimationState {
             initial_value,
             last_value: Cell::new(initial_value),
@@ -208,7 +204,12 @@ impl FlingAnimation {
         *self.state.borrow_mut() = Some(anim_state);
 
         // Start frame loop
-        schedule_next_frame(self.state.clone(), self.frame_clock.clone(), on_scroll, on_end);
+        schedule_next_frame(
+            self.state.clone(),
+            self.frame_clock.clone(),
+            on_scroll,
+            on_end,
+        );
     }
 
     pub fn cancel(&self) {
@@ -227,7 +228,6 @@ impl FlingAnimation {
             .as_ref()
             .is_some_and(|s| s.is_running.get())
     }
-
 }
 
 impl Clone for FlingAnimation {

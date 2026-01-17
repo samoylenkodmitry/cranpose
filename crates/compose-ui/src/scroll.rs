@@ -110,7 +110,6 @@ impl ScrollState {
             if callbacks.is_empty() {
                 // Defer invalidation until a node registers a callback.
                 self.inner.pending_invalidation.set(true);
-
             } else {
                 for callback in callbacks.values() {
                     callback();
@@ -137,7 +136,6 @@ impl ScrollState {
         let callbacks = self.inner.invalidate_callbacks.borrow();
         if callbacks.is_empty() {
             self.inner.pending_invalidation.set(true);
-
         } else {
             for callback in callbacks.values() {
                 callback();
@@ -293,15 +291,13 @@ impl ModifierNode for ScrollNode {
         self.node_id = node_id;
 
         if let Some(node_id) = node_id {
-
-
             let callback_id = self.state.add_invalidate_callback(Box::new(move || {
                 // Schedule scoped layout repass for this node
                 crate::schedule_layout_repass(node_id);
             }));
             self.invalidation_callback_id = Some(callback_id);
         } else {
-             log::error!("ScrollNode attached without a NodeId! Layout invalidation will fail.");
+            log::error!("ScrollNode attached without a NodeId! Layout invalidation will fail.");
         }
 
         // Initial invalidation

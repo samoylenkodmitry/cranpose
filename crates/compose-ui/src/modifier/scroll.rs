@@ -420,7 +420,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         // Start fling animation if velocity is significant
         if start_fling {
-
             if let Some(old_fling) = existing_fling {
                 old_fling.cancel();
             }

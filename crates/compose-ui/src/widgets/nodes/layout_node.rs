@@ -762,9 +762,7 @@ pub(crate) fn allocate_virtual_node_id() -> NodeId {
     use std::sync::atomic::Ordering;
     // Allocate IDs from a high range to avoid conflict with SlotTable IDs.
     // Thread-local counter avoids cross-thread contention (WASM is single-threaded anyway).
-    VIRTUAL_NODE_ID_COUNTER.with(|counter| {
-        counter.fetch_add(1, Ordering::Relaxed)
-    })
+    VIRTUAL_NODE_ID_COUNTER.with(|counter| counter.fetch_add(1, Ordering::Relaxed))
 }
 
 fn resolve_modifier_local_from_parent_chain(

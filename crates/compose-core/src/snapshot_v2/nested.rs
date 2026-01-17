@@ -279,8 +279,7 @@ impl NestedMutableSnapshot {
         write_observer: Option<WriteObserver>,
     ) -> Arc<NestedMutableSnapshot> {
         let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
-        let merged_write =
-            merge_write_observers(write_observer, self.state.write_observer.clone());
+        let merged_write = merge_write_observers(write_observer, self.state.write_observer.clone());
 
         let (new_id, runtime_invalid) = allocate_snapshot();
         let mut parent_invalid = self.state.invalid.borrow().clone();

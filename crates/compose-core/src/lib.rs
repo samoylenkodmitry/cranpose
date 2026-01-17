@@ -2367,6 +2367,9 @@ impl Composer {
         let mut parent_stack = self.parent_stack();
         if let Some(frame) = parent_stack.last_mut() {
             let parent_id = frame.id;
+            if parent_id == id {
+                return;
+            }
             frame.new_children.push(id);
             drop(parent_stack);
 
@@ -2517,7 +2520,6 @@ impl Composer {
     }
 
     pub fn pop_parent(&self) {
-
         let frame_opt = {
             let mut stack = self.parent_stack();
             stack.pop()
@@ -2543,11 +2545,9 @@ impl Composer {
                 let target = new_children.clone();
                 let desired: HashSet<NodeId> = target.iter().copied().collect();
 
-
                 for index in (0..current.len()).rev() {
                     let child = current[index];
                     if !desired.contains(&child) {
-
                         current.remove(index);
                         self.commands_mut()
                             .push(Box::new(move |applier: &mut dyn Applier| {
@@ -2586,8 +2586,6 @@ impl Composer {
                             }));
                     }
                 }
-
-
 
                 for (target_index, &child) in target.iter().enumerate() {
                     if let Some(current_index) = current.iter().position(|&c| c == child) {
@@ -2659,7 +2657,6 @@ impl Composer {
                         }
                     }
                 }
-
             }
 
             let expected_children = new_children.clone();
@@ -2717,7 +2714,6 @@ impl Composer {
 
             remembered.update(|entry| entry.children = new_children);
         }
-
     }
 
     pub fn take_commands(&self) -> Vec<Command> {
