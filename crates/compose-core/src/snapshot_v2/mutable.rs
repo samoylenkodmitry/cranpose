@@ -250,9 +250,8 @@ impl MutableSnapshot {
     }
 
     pub fn apply(&self) -> SnapshotApplyResult {
-        super::with_snapshot_lock(|| {
-            // Check disposed state first - return Failure instead of panicking
-            if self.state.disposed.get() {
+        // Check disposed state first - return Failure instead of panicking
+        if self.state.disposed.get() {
                 return SnapshotApplyResult::Failure;
             }
 
@@ -430,13 +429,12 @@ impl MutableSnapshot {
                 });
             }
 
-            let observer_states: Vec<Arc<dyn StateObject>> = applied_info
-                .iter()
-                .map(|(_, state, _)| state.clone())
-                .collect();
-            super::notify_apply_observers(&observer_states, this_id);
-            SnapshotApplyResult::Success
-        })
+        let observer_states: Vec<Arc<dyn StateObject>> = applied_info
+            .iter()
+            .map(|(_, state, _)| state.clone())
+            .collect();
+        super::notify_apply_observers(&observer_states, this_id);
+        SnapshotApplyResult::Success
     }
 
     pub fn take_nested_mutable_snapshot(
@@ -444,9 +442,8 @@ impl MutableSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
     ) -> Arc<NestedMutableSnapshot> {
-        super::with_snapshot_lock(|| {
-            self.validate_not_disposed();
-            self.validate_not_applied();
+        self.validate_not_disposed();
+        self.validate_not_applied();
 
             let merged_read = merge_read_observers(read_observer, self.state.read_observer.clone());
             let merged_write =
@@ -492,8 +489,7 @@ impl MutableSnapshot {
                 }
             });
 
-            nested
-        })
+        nested
     }
 
     /// Merge a child's modified set into this snapshot's modified set.
