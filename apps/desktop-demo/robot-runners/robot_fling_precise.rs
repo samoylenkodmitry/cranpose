@@ -11,7 +11,7 @@
 //! cargo run --package desktop-app --example robot_fling_precise --features robot-app
 //! ```
 
-use cranpose_app::{AppLauncher, Robot};
+use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;

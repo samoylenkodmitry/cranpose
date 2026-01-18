@@ -1,7 +1,7 @@
 //! Standard runtime services backed by Rust's `std` library.
 //!
 //! This crate provides concrete implementations of the platform
-//! abstraction traits defined in `compose-core`. Applications can
+//! abstraction traits defined in `cranpose-core`. Applications can
 //! construct a [`StdRuntime`] and pass it to [`cranpose_core::Composition`]
 //! to power the runtime with `std` primitives.
 

@@ -27,18 +27,18 @@ required-features = ["desktop"]
 
 [features]
 default = ["renderer-wgpu", "desktop"]
-renderer-pixels = ["cranpose-app/renderer-pixels"]
-renderer-wgpu = ["cranpose-app/renderer-wgpu"]
-desktop = ["cranpose-app/desktop"]
-android = ["cranpose-app/android"]
-web = ["cranpose-app/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
+renderer-pixels = ["cranpose/renderer-pixels"]
+renderer-wgpu = ["cranpose/renderer-wgpu"]
+desktop = ["cranpose/desktop"]
+android = ["cranpose/android"]
+web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:wasm-logger"]
 # Enable real app robot testing
 robot-app = ["cranpose-testing/robot-app", "logging", "cranpose-ui/test-helpers"]
 # Enable env_logger (adds ~600KB from regex)
 logging = ["dep:env_logger"]
 
 [dependencies]
-cranpose-app = { path = "../../crates/cranpose-app", default-features = false }
+cranpose = { path = "../../crates/cranpose", default-features = false }
 cranpose-animation = { path = "../../crates/cranpose-animation" }
 cranpose-core = { path = "../../crates/cranpose-core" }
 cranpose-ui = { path = "../../crates/cranpose-ui" }

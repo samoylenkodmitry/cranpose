@@ -6,7 +6,7 @@ license = "Apache-2.0"
 description = "Animation system for Cranpose"
 
 [dependencies]
-cranpose-core = { path = "../cranpose-core" }
+cranpose-core = { workspace = true }
 
 [features]
 default = []

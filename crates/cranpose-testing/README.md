@@ -1,3 +1,3 @@
-# compose-testing
+# cranpose-testing
 
 Testing utilities and harnesses for validating Cranpose behaviour.

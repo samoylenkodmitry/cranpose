@@ -7,10 +7,10 @@
 # Options:
 #   --core-only, -c   Only consolidate files related to the project's core areas:
 #                     - snapshot system (snapshot.rs, snapshot/*.rs)
-#                     - appshell (compose-app-shell crate)
+#                     - appshell (cranpose-app-shell crate)
 #                     - slot system (slot*, nodes/, subcompose.rs)
 #                     - runtime (runtime.rs, frame_clock.rs, launched_effect.rs, state.rs)
-#                     - composable macro (compose-macros crate)
+#                     - composable macro (cranpose-macros crate)
 
 # Get the project root directory
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,7 +27,7 @@ CORE_ONLY=false
 
 # Pattern used when CORE_ONLY=true to match files we consider "core".
 # This is intentionally permissive and matches paths/names seen in this repo.
-CORE_PATTERN="(compose-core|compose-app-shell|compose-macros|snapshot|snapshot.rs|subcompose.rs|slot|slots|nodes/|runtime.rs|frame_clock.rs|launched_effect.rs|state.rs)"
+CORE_PATTERN="(cranpose-core|cranpose-app-shell|cranpose-macros|snapshot|snapshot.rs|subcompose.rs|slot|slots|nodes/|runtime.rs|frame_clock.rs|launched_effect.rs|state.rs)"
 
 # Simple CLI parsing
 while [[ "$#" -gt 0 ]]; do

@@ -6,7 +6,7 @@
 //! BUG: Before fix, scroll_to_item would update data but not request a render,
 //! so the UI wouldn't update until the next user scroll/click.
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{

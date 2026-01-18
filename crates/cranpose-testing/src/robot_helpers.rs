@@ -1,12 +1,12 @@
 //! Common helper functions for robot tests
 //!
-//! These helpers work with `cranpose_app::SemanticElement` to find and interact
+//! These helpers work with `cranpose::SemanticElement` to find and interact
 //! with UI elements during robot testing.
 
 use crate::robot_assertions::{Bounds, SemanticElementLike};
-use cranpose_app::SemanticElement;
+use cranpose::SemanticElement;
 
-// Implement SemanticElementLike for cranpose_app::SemanticElement
+// Implement SemanticElementLike for cranpose::SemanticElement
 // This allows using the generic assertion helpers from robot_assertions
 impl SemanticElementLike for SemanticElement {
     fn text(&self) -> Option<&str> {
@@ -117,7 +117,7 @@ pub fn find_button_center(elem: &SemanticElement, text: &str) -> Option<(f32, f3
 
 /// Search the semantic tree from Robot, applying a finder function.
 /// Returns the first match found, or None.
-pub fn find_in_semantics<F>(robot: &cranpose_app::Robot, finder: F) -> Option<(f32, f32, f32, f32)>
+pub fn find_in_semantics<F>(robot: &cranpose::Robot, finder: F) -> Option<(f32, f32, f32, f32)>
 where
     F: Fn(&SemanticElement) -> Option<(f32, f32, f32, f32)>,
 {
@@ -139,10 +139,7 @@ where
 
 /// Find element by text in semantics tree.
 /// Convenience wrapper around find_in_semantics + find_text.
-pub fn find_text_in_semantics(
-    robot: &cranpose_app::Robot,
-    text: &str,
-) -> Option<(f32, f32, f32, f32)> {
+pub fn find_text_in_semantics(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
     let text = text.to_string();
     find_in_semantics(robot, |elem| find_text(elem, &text))
 }
@@ -176,7 +173,7 @@ pub fn find_text_by_prefix(
 /// Returns bounds (x, y, width, height) and the full text content.
 /// Useful for parsing dynamic text like "Stats: C=5 E=3 D=2".
 pub fn find_text_by_prefix_in_semantics(
-    robot: &cranpose_app::Robot,
+    robot: &cranpose::Robot,
     prefix: &str,
 ) -> Option<(f32, f32, f32, f32, String)> {
     let prefix = prefix.to_string();
@@ -199,7 +196,7 @@ pub fn find_text_by_prefix_in_semantics(
 /// Find button by text in semantics tree.
 /// Convenience wrapper around find_in_semantics + find_button.
 pub fn find_button_in_semantics(
-    robot: &cranpose_app::Robot,
+    robot: &cranpose::Robot,
     text: &str,
 ) -> Option<(f32, f32, f32, f32)> {
     let text = text.to_string();

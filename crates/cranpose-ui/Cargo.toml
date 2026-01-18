@@ -6,13 +6,13 @@ license = "Apache-2.0"
 description = "UI primitives for Cranpose"
 
 [dependencies]
-cranpose-core = { path = "../cranpose-core" }
-cranpose-macros = { path = "../cranpose-macros" }
-cranpose-runtime-std = { path = "../cranpose-runtime-std" }
-cranpose-foundation = { path = "../cranpose-foundation" }
-cranpose-animation = { path = "../cranpose-animation" }
-cranpose-ui-layout = { path = "../cranpose-ui-layout" }
-cranpose-ui-graphics = { path = "../cranpose-ui-graphics" }
+cranpose-core = { workspace = true }
+cranpose-macros = { workspace = true }
+cranpose-runtime-std = { workspace = true }
+cranpose-foundation = { workspace = true }
+cranpose-animation = { workspace = true }
+cranpose-ui-layout = { workspace = true }
+cranpose-ui-graphics = { workspace = true }
 indexmap = "=2.7.1"
 smallvec = "1.13"
 futures-task = "0.3"
@@ -28,7 +28,7 @@ test-helpers = []
 
 [dev-dependencies]
 criterion = "0.5"
-cranpose-testing = { path = "../cranpose-testing" }
+cranpose-testing = { workspace = true }
 
 [[bench]]
 name = "pipeline"

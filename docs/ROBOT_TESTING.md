@@ -10,7 +10,7 @@ Add the `robot-app` feature to your dev dependencies:
 
 ```toml
 [dev-dependencies]
-compose-testing = { path = "../../crates/compose-testing", features = ["robot-app"] }
+cranpose-testing = { path = "../../crates/cranpose-testing", features = ["robot-app"] }
 ```
 
 ### Basic Example

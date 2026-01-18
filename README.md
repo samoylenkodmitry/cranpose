@@ -75,7 +75,7 @@ For detailed web build instructions, see [`apps/desktop-demo/README.md`](apps/de
 ### Desktop
 
 ```rust
-use cranpose_app::AppLauncher;
+use cranpose::prelude::*;
 
 fn main() {
     let _ = env_logger::try_init();
@@ -95,7 +95,7 @@ fn my_app() {
 ### Android
 
 ```rust
-use cranpose_app::AppLauncher;
+use cranpose::prelude::*;
 
 #[no_mangle]
 fn android_main(app: android_activity::AndroidApp) {
@@ -113,7 +113,7 @@ fn my_app() {
 ### Web
 
 ```rust
-use cranpose_app::AppLauncher;
+use cranpose::prelude::*;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]

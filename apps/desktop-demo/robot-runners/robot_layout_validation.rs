@@ -11,7 +11,7 @@
 //! cargo run --package desktop-app --example robot_layout_validation --features robot-app
 //! ```
 
-use cranpose_app::{AppLauncher, SemanticElement};
+use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 use std::time::Duration;

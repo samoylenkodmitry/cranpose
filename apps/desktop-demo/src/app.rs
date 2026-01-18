@@ -812,7 +812,7 @@ pub fn AsyncRuntimeTabContent(
                                     move || {
                                         // WORKAROUND: Use with_key to prevent slot truncation from destroying
                                         // sibling component scopes when conditional rendering changes structure.
-                                        // TODO: Remove once proper "gaps" support is implemented in compose-core
+                                        // TODO: Remove once proper "gaps" support is implemented in cranpose-core
                                         cranpose_core::with_key(&(progress_fraction > 0.0), || {
                                             if progress_fraction > 0.0 {
                                                 Row(

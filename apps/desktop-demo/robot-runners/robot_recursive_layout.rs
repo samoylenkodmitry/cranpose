@@ -5,7 +5,7 @@
 //! cargo run --package desktop-app --example robot_recursive_layout --features robot-app
 //! ```
 
-use cranpose_app::{AppLauncher, SemanticElement};
+use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
 };
@@ -106,7 +106,7 @@ fn print_semantics_with_bounds(elem: &SemanticElement, indent: usize) {
     }
 }
 
-fn validate_recursive_layout(robot: &cranpose_app::Robot, label: &str) -> Vec<String> {
+fn validate_recursive_layout(robot: &cranpose::Robot, label: &str) -> Vec<String> {
     let mut issues = Vec::new();
     let Ok(semantics) = robot.get_semantics() else {
         return vec!["Failed to fetch semantics".to_string()];

@@ -9,7 +9,7 @@
 //! cargo run --package desktop-app --example robot_progress_bar --features robot-app
 //! ```
 
-use cranpose_app::{AppLauncher, SemanticElement};
+use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::{Button, Column, ColumnSpec, Modifier, Size, Spacer, Text};
 use desktop_app::app::{AnimationState, AsyncRuntimeTabContent, FrameStats};

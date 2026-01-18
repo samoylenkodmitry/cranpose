@@ -6,7 +6,7 @@ license = "Apache-2.0"
 description = "Common rendering contracts for Cranpose"
 
 [dependencies]
-cranpose-foundation = { path = "../../cranpose-foundation" }
-cranpose-ui-graphics = { path = "../../cranpose-ui-graphics" }
-cranpose-ui = { path = "../../cranpose-ui" }
-cranpose-core = { path = "../../cranpose-core" }
+cranpose-foundation = { workspace = true }
+cranpose-ui-graphics = { workspace = true }
+cranpose-ui = { workspace = true }
+cranpose-core = { workspace = true }

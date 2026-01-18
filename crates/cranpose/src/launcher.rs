@@ -62,7 +62,7 @@ impl Default for AppSettings {
 /// # Example
 ///
 /// ```no_run
-/// use cranpose_app::AppLauncher;
+/// use cranpose::AppLauncher;
 ///
 /// // Desktop
 /// #[cfg(not(target_os = "android"))]
@@ -145,7 +145,7 @@ impl AppLauncher {
     /// # Example
     ///
     /// ```no_run
-    /// use cranpose_app::AppLauncher;
+    /// use cranpose::AppLauncher;
     ///
     /// AppLauncher::new()
     ///     .with_title("Robot Test")
@@ -174,7 +174,7 @@ impl AppLauncher {
     /// # Example
     ///
     /// ```no_run
-    /// use cranpose_app::AppLauncher;
+    /// use cranpose::AppLauncher;
     ///
     /// AppLauncher::new()
     ///     .with_title("My App")
@@ -198,7 +198,7 @@ impl AppLauncher {
     /// # Example
     ///
     /// ```no_run
-    /// use cranpose_app::AppLauncher;
+    /// use cranpose::AppLauncher;
     ///
     /// AppLauncher::new()
     ///     .with_title("My App")
@@ -222,7 +222,7 @@ impl AppLauncher {
     /// # Example
     ///
     /// ```no_run
-    /// use cranpose_app::AppLauncher;
+    /// use cranpose::AppLauncher;
     ///
     /// AppLauncher::new()
     ///     .with_title("My App")
@@ -246,7 +246,7 @@ impl AppLauncher {
     /// # Example
     ///
     /// ```no_run
-    /// use cranpose_app::AppLauncher;
+    /// use cranpose::AppLauncher;
     ///
     /// AppLauncher::new()
     ///     .with_title("Robot Test")

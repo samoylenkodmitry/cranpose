@@ -1,4 +1,4 @@
-# compose-render-wgpu
+# cranpose-render-wgpu
 
 GPU-accelerated renderer backend for cranpose using WGPU.
 

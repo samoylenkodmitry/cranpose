@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use cranpose_app::AppLauncher;
+//! use cranpose::AppLauncher;
 //!
 //! AppLauncher::new()
 //!     .with_recording("/tmp/my_test.rs")
@@ -22,7 +22,7 @@
 //! for compact, data-driven test representation:
 //!
 //! ```ignore
-//! use cranpose_app::recorder::{RobotAction, execute_actions};
+//! use cranpose::recorder::{RobotAction, execute_actions};
 //!
 //! let actions = [
 //!     RobotAction::Sleep(100),
@@ -247,9 +247,9 @@ impl InputRecorder {
         writeln!(file)?;
         writeln!(
             file,
-            "use cranpose_app::recorder::{{RobotAction, execute_actions}};"
+            "use cranpose::recorder::{{RobotAction, execute_actions}};"
         )?;
-        writeln!(file, "use cranpose_app::AppLauncher;")?;
+        writeln!(file, "use cranpose::AppLauncher;")?;
         writeln!(file, "use RobotAction::*;")?;
         writeln!(file, "use std::time::Duration;")?;
         writeln!(file)?;
@@ -378,7 +378,7 @@ mod tests {
             .unwrap();
 
         // Verify data-driven format
-        assert!(content.contains("use cranpose_app::recorder::{RobotAction, execute_actions};"));
+        assert!(content.contains("use cranpose::recorder::{RobotAction, execute_actions};"));
         assert!(content.contains("const ACTIONS: &[RobotAction] = &["));
         assert!(content.contains("MouseMove(100.0, 200.0)"));
         assert!(content.contains("MouseDown,"));

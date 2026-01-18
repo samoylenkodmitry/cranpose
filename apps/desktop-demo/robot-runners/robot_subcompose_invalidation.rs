@@ -13,7 +13,7 @@
 //! cargo run --package desktop-app --example robot_subcompose_invalidation --features robot-app
 //! ```
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_core::useState;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::{find_button, find_in_semantics, find_text_in_semantics};

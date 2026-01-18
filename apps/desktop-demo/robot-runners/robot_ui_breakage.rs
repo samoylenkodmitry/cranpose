@@ -15,7 +15,7 @@ use cranpose_ui::{
     composable, Box, BoxSpec, Button, Column, ColumnSpec, Modifier, Row, RowSpec, Text,
 };
 // use desktop_app::app;
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
 use std::time::Duration;
 

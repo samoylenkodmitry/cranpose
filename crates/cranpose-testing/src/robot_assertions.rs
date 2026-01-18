@@ -107,7 +107,7 @@ impl Bounds {
 }
 
 /// Generic semantic element trait for tree traversal
-/// This allows the helpers to work with both cranpose_app::SemanticElement and similar types
+/// This allows the helpers to work with both cranpose::SemanticElement and similar types
 pub trait SemanticElementLike {
     fn text(&self) -> Option<&str>;
     fn role(&self) -> &str;

@@ -16,7 +16,7 @@
 //! cargo run --package desktop-app --example robot_reactive_state --features robot-app
 //! ```
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;
@@ -100,7 +100,7 @@ fn main() {
 
                 // Helper to find element with BOTH patterns (recursive search)
                 fn find_dual_text(
-                    elem: &cranpose_app::SemanticElement,
+                    elem: &cranpose::SemanticElement,
                     pat1: &str,
                     pat2: &str,
                 ) -> Option<(f32, f32, f32, f32)> {

@@ -39,7 +39,7 @@ python3 -m http.server 8080
 
 ## Technical Implementation
 
-In `crates/compose-app/src/web.rs`, we initialize wgpu with the GL backend:
+In `crates/cranpose/src/web.rs`, we initialize wgpu with the GL backend:
 
 ```rust
 let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -48,7 +48,7 @@ let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
 });
 ```
 
-The `webgl` feature is enabled in `crates/compose-render/wgpu/Cargo.toml`:
+The `webgl` feature is enabled in `crates/cranpose-render/wgpu/Cargo.toml`:
 
 ```toml
 wgpu = { version = "0.19", features = ["webgl"] }

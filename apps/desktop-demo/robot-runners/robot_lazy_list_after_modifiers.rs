@@ -7,7 +7,7 @@
 
 mod robot_test_utils;
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 use robot_test_utils::{

@@ -84,7 +84,7 @@ enum ModifierKind {
 
 ### The Foundation Traits
 
-**Location**: `crates/compose-foundation/src/modifier.rs`
+**Location**: `crates/cranpose-foundation/src/modifier.rs`
 
 #### ModifierNode (Base Trait)
 
@@ -238,7 +238,7 @@ impl LayoutModifierNode for PaddingNode {
 
 ### The Modifier Type
 
-**Location**: `crates/compose-ui/src/modifier/mod.rs`
+**Location**: `crates/cranpose-ui/src/modifier/mod.rs`
 
 The `Modifier` struct is the user-facing API:
 
@@ -350,7 +350,7 @@ let elements: Vec<DynModifierElement> = modifier.fold_in(Vec::new(), |mut acc, e
 
 ### ModifierNodeChain
 
-**Location**: `crates/compose-foundation/src/modifier.rs`
+**Location**: `crates/cranpose-foundation/src/modifier.rs`
 
 The `ModifierNodeChain` is the runtime representation that:
 - Owns `Box<dyn ModifierNode>` instances (wrapped in `Rc<RefCell<>>`)
@@ -474,7 +474,7 @@ impl ModifierNodeChain {
 
 ### Layout Modifiers
 
-**Location**: `crates/compose-ui/src/modifier_nodes.rs`
+**Location**: `crates/cranpose-ui/src/modifier_nodes.rs`
 
 #### PaddingNode
 
@@ -776,7 +776,7 @@ impl<E: ModifierNodeElement> AnyModifierElement for TypedModifierElement<E> {
 
 ### ModifierChainHandle
 
-**Location**: `crates/compose-ui/src/modifier/chain.rs`
+**Location**: `crates/cranpose-ui/src/modifier/chain.rs`
 
 The `ModifierChainHandle` bridges the `Modifier` API and the layout tree:
 
@@ -870,7 +870,7 @@ impl ModifierChainHandle {
 
 ### Measurement Proxy System
 
-**Location**: `crates/compose-foundation/src/measurement_proxy.rs`
+**Location**: `crates/cranpose-foundation/src/measurement_proxy.rs`
 
 **Problem**: Rust's borrow checker prevents holding mutable references to nodes during measurement recursion.
 
@@ -931,7 +931,7 @@ impl LayoutModifierNode for PaddingNode {
 
 ## Modifier Slices
 
-**Location**: `crates/compose-ui/src/modifier/slices.rs`
+**Location**: `crates/cranpose-ui/src/modifier/slices.rs`
 
 **Purpose**: Pre-collect capabilities for rendering/input without traversing chain repeatedly during hot paths.
 
@@ -1023,7 +1023,7 @@ impl LayoutNode {
 
 ### NodeCapabilities Bitflags
 
-**Location**: `crates/compose-foundation/src/modifier.rs`
+**Location**: `crates/cranpose-foundation/src/modifier.rs`
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1108,7 +1108,7 @@ for invalidation in invalidations {
 
 ### Helper Macros
 
-**Location**: `crates/compose-foundation/src/modifier_helpers.rs`
+**Location**: `crates/cranpose-foundation/src/modifier_helpers.rs`
 
 Reduce boilerplate for capability declarations:
 
@@ -1173,19 +1173,19 @@ let modifier = Modifier::empty()
 
 | File Path | Responsibilities |
 |-----------|------------------|
-| `compose-foundation/src/modifier.rs` | Core traits (`ModifierNode`, `LayoutModifierNode`, `DrawModifierNode`, `PointerInputNode`, `SemanticsNode`, `FocusNode`), `ModifierNodeChain` reconciliation and lifecycle, capability bitflags, node context traits |
-| `compose-ui/src/modifier/mod.rs` | `Modifier` type definition, composition via `then()`, fold operations (`fold_in`, `fold_out`), element extraction, empty modifier singleton |
-| `compose-ui/src/modifier/chain.rs` | `ModifierChainHandle` integration bridge, `ResolvedModifiers` caching, invalidation propagation, measurement chain setup |
-| `compose-ui/src/modifier_nodes.rs` | All built-in modifier nodes: `PaddingNode`, `SizeNode`, `FillNode`, `OffsetNode`, `BackgroundNode`, `CornerShapeNode`, `ClickableNode`, etc. |
-| `compose-ui/src/modifier/slices.rs` | `ModifierNodeSlices` collection, draw command aggregation, background+shape combination, pointer input collection |
-| `compose-foundation/src/measurement_proxy.rs` | `MeasurementProxy` trait, concrete proxies (`PaddingMeasurementProxy`, `SizeMeasurementProxy`), borrow-checker-safe measurement |
-| `compose-ui/src/modifier/padding.rs` | Padding modifier factory methods (`padding()`, `padding_symmetric()`, `padding_all()`), `PaddingElement` definition |
-| `compose-ui/src/modifier/size.rs` | Size modifier factory methods (`size()`, `width()`, `height()`, `required_size()`), `SizeElement` definition |
-| `compose-ui/src/modifier/fill.rs` | Fill modifier factory methods (`fill_max_width()`, `fill_max_height()`, `fill_max_size()`), `FillElement` definition |
-| `compose-ui/src/modifier/background.rs` | Background/corner shape factory methods (`background()`, `corner_shape()`), element definitions |
-| `compose-ui/src/modifier/clickable.rs` | Clickable modifier factory method, `ClickableElement` and `ClickableNode` implementations |
-| `compose-ui/src/modifier/offset.rs` | Offset modifier factory methods (`offset()`, `absolute_offset()`), RTL support |
-| `compose-foundation/src/modifier_helpers.rs` | Helper macros (`impl_modifier_node!`), boilerplate reduction utilities |
+| `cranpose-foundation/src/modifier.rs` | Core traits (`ModifierNode`, `LayoutModifierNode`, `DrawModifierNode`, `PointerInputNode`, `SemanticsNode`, `FocusNode`), `ModifierNodeChain` reconciliation and lifecycle, capability bitflags, node context traits |
+| `cranpose-ui/src/modifier/mod.rs` | `Modifier` type definition, composition via `then()`, fold operations (`fold_in`, `fold_out`), element extraction, empty modifier singleton |
+| `cranpose-ui/src/modifier/chain.rs` | `ModifierChainHandle` integration bridge, `ResolvedModifiers` caching, invalidation propagation, measurement chain setup |
+| `cranpose-ui/src/modifier_nodes.rs` | All built-in modifier nodes: `PaddingNode`, `SizeNode`, `FillNode`, `OffsetNode`, `BackgroundNode`, `CornerShapeNode`, `ClickableNode`, etc. |
+| `cranpose-ui/src/modifier/slices.rs` | `ModifierNodeSlices` collection, draw command aggregation, background+shape combination, pointer input collection |
+| `cranpose-foundation/src/measurement_proxy.rs` | `MeasurementProxy` trait, concrete proxies (`PaddingMeasurementProxy`, `SizeMeasurementProxy`), borrow-checker-safe measurement |
+| `cranpose-ui/src/modifier/padding.rs` | Padding modifier factory methods (`padding()`, `padding_symmetric()`, `padding_all()`), `PaddingElement` definition |
+| `cranpose-ui/src/modifier/size.rs` | Size modifier factory methods (`size()`, `width()`, `height()`, `required_size()`), `SizeElement` definition |
+| `cranpose-ui/src/modifier/fill.rs` | Fill modifier factory methods (`fill_max_width()`, `fill_max_height()`, `fill_max_size()`), `FillElement` definition |
+| `cranpose-ui/src/modifier/background.rs` | Background/corner shape factory methods (`background()`, `corner_shape()`), element definitions |
+| `cranpose-ui/src/modifier/clickable.rs` | Clickable modifier factory method, `ClickableElement` and `ClickableNode` implementations |
+| `cranpose-ui/src/modifier/offset.rs` | Offset modifier factory methods (`offset()`, `absolute_offset()`), RTL support |
+| `cranpose-foundation/src/modifier_helpers.rs` | Helper macros (`impl_modifier_node!`), boilerplate reduction utilities |
 
 ---
 

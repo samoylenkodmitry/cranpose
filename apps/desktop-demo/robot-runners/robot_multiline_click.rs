@@ -6,7 +6,7 @@
 //! cargo run --package desktop-app --example robot_multiline_click --features robot-app
 //! ```
 
-use cranpose_app::{AppLauncher, Robot};
+use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button, find_in_semantics, find_text_exact};
 use desktop_app::app;
 use std::time::Duration;
@@ -213,7 +213,7 @@ fn main() {
 
 fn print_all_texts(robot: &Robot) {
     find_in_semantics(robot, |elem| {
-        fn search(elem: &cranpose_app::SemanticElement) {
+        fn search(elem: &cranpose::SemanticElement) {
             if let Some(ref t) = elem.text {
                 if !t.is_empty() {
                     println!("    Text: '{}'", t.replace('\n', "\\n"));
@@ -231,10 +231,7 @@ fn print_all_texts(robot: &Robot) {
 fn find_multiline_text(robot: &Robot) -> Option<String> {
     let result: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
     find_in_semantics(robot, |elem| {
-        fn search(
-            elem: &cranpose_app::SemanticElement,
-            result: &std::cell::RefCell<Option<String>>,
-        ) {
+        fn search(elem: &cranpose::SemanticElement, result: &std::cell::RefCell<Option<String>>) {
             if let Some(ref t) = elem.text {
                 // Look for multiline text containing our test characters (lowercase)
                 if t.contains('\n') && (t.contains('a') || t.contains('b') || t.contains('c')) {

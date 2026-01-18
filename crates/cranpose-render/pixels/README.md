@@ -1,3 +1,3 @@
-# compose-render-pixels
+# cranpose-render-pixels
 
 Pixels-based renderer implementation for driving the Cranpose demo application.

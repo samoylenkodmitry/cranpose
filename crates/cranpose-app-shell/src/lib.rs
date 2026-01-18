@@ -32,7 +32,7 @@ use cranpose_ui_graphics::{Point, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
 use std::collections::HashSet;
 
-// Re-export key event types for use by compose-app
+// Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 
 pub struct AppShell<R>
@@ -747,7 +747,7 @@ where
             let mut applier = self.composition.applier_mut();
             for node_id in repass_nodes {
                 // Bubble measure dirty flags up to root so cache epoch increments.
-                // This uses the centralized function in compose-core.
+                // This uses the centralized function in cranpose-core.
                 cranpose_core::bubble_measure_dirty(
                     &mut *applier as &mut dyn cranpose_core::Applier,
                     node_id,

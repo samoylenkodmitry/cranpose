@@ -32,14 +32,14 @@ Virtualized lazy layouts for Cranpose with 1:1 API and architecture parity with 
 
 | File | Purpose |
 |------|---------|
-| `compose-foundation/src/lazy/lazy_list_state.rs` | Scroll state + stats. Implements `LazyListState` with `Rc<RefCell<Inner>>` and reactive `stats`. |
-| `compose-foundation/src/lazy/lazy_list_scope.rs` | DSL + IntervalContent |
-| `compose-foundation/src/lazy/lazy_list_measure.rs` | Measurement algorithm. `measure_lazy_list` function. |
-| `compose-foundation/src/lazy/prefetch.rs` | Prefetch scheduler |
-| `compose-ui/src/widgets/lazy_list.rs` | LazyColumn/LazyRow widgets |
-| `compose-ui/src/subcompose_layout.rs` | SubcomposeLayoutNode implementation. Uses `SubcomposeMeasureScopeImpl`. |
-| `compose-ui/src/modifier/scroll.rs` | Scroll gestures |
-| `compose-core/src/subcompose.rs` | SubcomposeState + lifecycle. Tracks active/reusable/precomposed slots. |
+| `cranpose-foundation/src/lazy/lazy_list_state.rs` | Scroll state + stats. Implements `LazyListState` with `Rc<RefCell<Inner>>` and reactive `stats`. |
+| `cranpose-foundation/src/lazy/lazy_list_scope.rs` | DSL + IntervalContent |
+| `cranpose-foundation/src/lazy/lazy_list_measure.rs` | Measurement algorithm. `measure_lazy_list` function. |
+| `cranpose-foundation/src/lazy/prefetch.rs` | Prefetch scheduler |
+| `cranpose-ui/src/widgets/lazy_list.rs` | LazyColumn/LazyRow widgets |
+| `cranpose-ui/src/subcompose_layout.rs` | SubcomposeLayoutNode implementation. Uses `SubcomposeMeasureScopeImpl`. |
+| `cranpose-ui/src/modifier/scroll.rs` | Scroll gestures |
+| `cranpose-core/src/subcompose.rs` | SubcomposeState + lifecycle. Tracks active/reusable/precomposed slots. |
 
 ### JC Reference (`/media/huge/composerepo/`)
 

@@ -2,7 +2,7 @@
 //! Generated at: timestamp
 //! Events: 437
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use std::time::Duration;
 
 fn main() {

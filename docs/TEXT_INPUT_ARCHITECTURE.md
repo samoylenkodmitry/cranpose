@@ -9,7 +9,7 @@
 
 ## 1. System Overview
 
-The text input system is a vertical slice covering data storage, rendering, and input processing. It follows the **Jetpack Compose** architecture but is adapted for Rust's ownership model and the `compose-ui` rendering pipeline.
+The text input system is a vertical slice covering data storage, rendering, and input processing. It follows the **Jetpack Compose** architecture but is adapted for Rust's ownership model and the `cranpose-ui` rendering pipeline.
 
 ### Core Component Interactive Flow
 
@@ -21,21 +21,21 @@ The text input system is a vertical slice covering data storage, rendering, and 
 
 ---
 
-## 2. Data Models (`compose-foundation`)
+## 2. Data Models (`cranpose-foundation`)
 
 ### `TextFieldState` (The Source of Truth)
-*   **Location**: `crates/compose-foundation/src/text/state.rs`
+*   **Location**: `crates/cranpose-foundation/src/text/state.rs`
 *   **Role**: Internal state holder. Application logic holds this and passes it to the widget.
 *   **Storage**: Internally wraps `Rc<RefCell<TextFieldStateInner>>` and `Rc<MutableState<TextFieldValue>>`.
 *   **Quirk**: Changes *must* go through `.edit(|buffer| ...)` closure. This ensures change notification and undo state capture.
 
 ### `TextFieldBuffer` (The Editor)
-*   **Location**: `crates/compose-foundation/src/text/buffer.rs`
+*   **Location**: `crates/cranpose-foundation/src/text/buffer.rs`
 *   **Role**: Temporary, mutable view of the text/selection used *only* inside an `edit` block.
 *   **Quirk**: All indices are **UTF-8 byte offsets**, not character indices. It enforces valid Unicode boundaries for all operations.
 
 ### `TextRange` (The Cursor/Selection)
-*   **Location**: `crates/compose-foundation/src/text/range.rs`
+*   **Location**: `crates/cranpose-foundation/src/text/range.rs`
 *   **Role**: Immutable struct `{ start: usize, end: usize }`.
 *   **Quirks**:
     *   `start` can be greater than `end` (indicating reverse selection direction). Always use `.min()`/`.max()` for slicing.
@@ -43,12 +43,12 @@ The text input system is a vertical slice covering data storage, rendering, and 
 
 ---
 
-## 3. Input & Focus Subsystem (`compose-ui`)
+## 3. Input & Focus Subsystem (`cranpose-ui`)
 
 ### The O(1) Focus Dispatch Trick
 *   **Problem**: finding the focused node in a deep UI tree is O(N).
 *   **Solution**: We use **Thread-Local Storage** to store the currently focused handler.
-*   **Implementation**: `crates/compose-ui/src/text_field_focus.rs`
+*   **Implementation**: `crates/cranpose-ui/src/text_field_focus.rs`
     *   `thread_local! { static FOCUSED_HANDLER: ... }`
 *   **Flow**:
     1.  `AppShell` receives KeyDown.
@@ -64,10 +64,10 @@ The text input system is a vertical slice covering data storage, rendering, and 
 
 ---
 
-## 4. Rendering Pipeline (`compose-ui`)
+## 4. Rendering Pipeline (`cranpose-ui`)
 
 ### `TextFieldModifierNode`
-*   **Location**: `crates/compose-ui/src/text_field_modifier_node.rs`
+*   **Location**: `crates/cranpose-ui/src/text_field_modifier_node.rs`
 *   **Role**: The "Node" that lives in the UI tree. Handles Layout, Draw, and Pointer Input.
 *   **Architecture**: It is a *Modifier Node*, not a basic Widget. This separates layout policy (where to place it) from the text logic itself.
 
@@ -83,7 +83,7 @@ To avoid ownership issues during the draw phase, `create_draw_closure(self)` cap
 *   **Features**: Click focus, cursor positioning, double-click word selection, triple-click select-all, drag selection.
 
 ### Cursor Animation
-*   **Location**: `crates/compose-ui/src/cursor_animation.rs`
+*   **Location**: `crates/cranpose-ui/src/cursor_animation.rs`
 *   **Mechanism**: Global thread-local state tracks "is cursor visible".
 *   **Loop**: `AppShell` event loop uses `ControlFlow::WaitUntil` to wake up exactly when the cursor needs to toggle (every 500ms).
 *   **Optimization**: If the text field is not focused, the timer stops completely.
@@ -128,17 +128,17 @@ Users hate when `Ctrl+Z` undoes one character at a time.
 
 | File Path | Component | Responsibility |
 |-----------|-----------|----------------|
-| `compose-foundation/text/state.rs` | **State** | Data holder, Undo/Redo, Line cache. |
-| `compose-foundation/text/buffer.rs` | **Buffer** | Mutable editing logic, Unicode safety. |
-| `compose-foundation/text/range.rs` | **Range** | Selection/cursor, `safe_slice()` utility. |
-| `compose-ui/widgets/basic_text_field.rs` | **Widget**| Composable entry point. |
-| `compose-ui/text_field_modifier_node.rs` | **Node** | Layout, Draw, Pointer (delegated). |
-| `compose-ui/text_field_focus.rs` | **Focus** | O(1) dispatch mechanism. |
-| `compose-ui/text_field_handler.rs` | **Bridge** | Connects Focus system to State. |
-| `compose-ui/text_field_input.rs` | **Input** | Shared keyboard event handling. |
-| `compose-ui/word_boundaries.rs` | **Text** | Unicode word boundary detection. |
-| `compose-ui/cursor_animation.rs` | **Anim** | Blink timer logic. |
-| `compose-app/desktop.rs` | **Platform**| `winit` key mapping table. |
+| `cranpose-foundation/text/state.rs` | **State** | Data holder, Undo/Redo, Line cache. |
+| `cranpose-foundation/text/buffer.rs` | **Buffer** | Mutable editing logic, Unicode safety. |
+| `cranpose-foundation/text/range.rs` | **Range** | Selection/cursor, `safe_slice()` utility. |
+| `cranpose-ui/widgets/basic_text_field.rs` | **Widget**| Composable entry point. |
+| `cranpose-ui/text_field_modifier_node.rs` | **Node** | Layout, Draw, Pointer (delegated). |
+| `cranpose-ui/text_field_focus.rs` | **Focus** | O(1) dispatch mechanism. |
+| `cranpose-ui/text_field_handler.rs` | **Bridge** | Connects Focus system to State. |
+| `cranpose-ui/text_field_input.rs` | **Input** | Shared keyboard event handling. |
+| `cranpose-ui/word_boundaries.rs` | **Text** | Unicode word boundary detection. |
+| `cranpose-ui/cursor_animation.rs` | **Anim** | Blink timer logic. |
+| `cranpose/desktop.rs` | **Platform**| `winit` key mapping table. |
 
 ---
 

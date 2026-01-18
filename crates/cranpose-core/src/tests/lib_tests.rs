@@ -2505,7 +2505,7 @@ fn snapshot_state_child_apply_after_parent_history() {
 }
 
 // Note: Tests for ComposeTestRule and run_test_composition have been moved to
-// the compose-testing crate to avoid circular dependencies.
+// the cranpose-testing crate to avoid circular dependencies.
 
 #[composable]
 fn anchor_progress_content(toggle: MutableState<bool>, stats: MutableState<i32>) {

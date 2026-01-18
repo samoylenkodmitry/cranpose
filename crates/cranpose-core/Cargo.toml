@@ -17,6 +17,6 @@ default = []
 std-hash = []
 
 [dev-dependencies]
-cranpose-ui = { path = "../cranpose-ui" }
-cranpose-macros = { path = "../cranpose-macros" }
-cranpose-testing = { path = "../cranpose-testing" }
+cranpose-ui = { workspace = true }
+cranpose-macros = { workspace = true }
+cranpose-testing = { workspace = true }

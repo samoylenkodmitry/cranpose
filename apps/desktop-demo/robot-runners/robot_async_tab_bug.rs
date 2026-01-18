@@ -1,4 +1,4 @@
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_testing::find_text_center;
 use desktop_app::app;
 use std::time::Duration;

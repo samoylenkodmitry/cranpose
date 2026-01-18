@@ -12,10 +12,10 @@ To build and run the desktop app with GPU acceleration:
 
 ```bash
 # Build with WGPU renderer (recommended)
-cargo build --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
+cargo build --no-default-features --features="cranpose/desktop,cranpose/renderer-wgpu"
 
 # Run with WGPU renderer
-cargo run --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
+cargo run --no-default-features --features="cranpose/desktop,cranpose/renderer-wgpu"
 ```
 
 ### Default (CPU) Renderer
@@ -69,7 +69,7 @@ Compare CPU usage between renderers:
 cargo flamegraph --package desktop-app
 
 # Run with GPU renderer and profile
-cargo flamegraph --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu" --package desktop-app
+cargo flamegraph --no-default-features --features="cranpose/desktop,cranpose/renderer-wgpu" --package desktop-app
 ```
 
 The GPU renderer should show:
@@ -83,7 +83,7 @@ The WGPU renderer logs GPU backend information at startup:
 
 ```bash
 # Look for WGPU backend logs when running
-RUST_LOG=debug cargo run --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
+RUST_LOG=debug cargo run --no-default-features --features="cranpose/desktop,cranpose/renderer-wgpu"
 ```
 
 Expected output:
@@ -118,8 +118,8 @@ To support WGPU 0.19 with `raw-window-handle` 0.6 compatibility, winit was upgra
 ```toml
 # Cargo.toml features
 default = ["desktop", "renderer-pixels"]
-renderer-pixels = ["compose-render-pixels", "dep:pixels"]
-renderer-wgpu = ["compose-render-wgpu", "dep:wgpu", "dep:pollster"]
+renderer-pixels = ["cranpose-render-pixels", "dep:pixels"]
+renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 ```
 
 ### Renderer Selection
@@ -171,7 +171,7 @@ If you encounter build errors with feature flags:
 cargo clean
 
 # Rebuild with specific features
-cargo build --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
+cargo build --no-default-features --features="cranpose/desktop,cranpose/renderer-wgpu"
 ```
 
 ### GPU Not Available
@@ -186,7 +186,7 @@ If GPU renderer is slower than expected:
 - Verify GPU is not throttled (battery saving mode)
 - Check for debug build vs release build:
   ```bash
-  cargo run --release --no-default-features --features="compose-app/desktop,compose-app/renderer-wgpu"
+  cargo run --release --no-default-features --features="cranpose/desktop,cranpose/renderer-wgpu"
   ```
 
 ## Next Steps
@@ -200,7 +200,7 @@ If GPU renderer is slower than expected:
 
 - [WGPU Documentation](https://wgpu.rs/)
 - [Glyphon Text Rendering](https://github.com/grovesNL/glyphon)
-- [cranpose GPU Renderer README](crates/compose-render/wgpu/README.md)
+- [cranpose GPU Renderer README](crates/cranpose-render/wgpu/README.md)
 
 ---
 

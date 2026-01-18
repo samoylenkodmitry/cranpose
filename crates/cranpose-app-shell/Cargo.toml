@@ -6,18 +6,18 @@ license = "Apache-2.0"
 description = "Application orchestration shell for Cranpose"
 
 [dependencies]
-cranpose-core = { path = "../cranpose-core" }
-cranpose-runtime-std = { path = "../cranpose-runtime-std" }
-cranpose-render-common = { path = "../cranpose-render/common" }
-cranpose-ui = { path = "../cranpose-ui" }
-cranpose-ui-graphics = { path = "../cranpose-ui-graphics" }
-cranpose-foundation = { path = "../cranpose-foundation" }
+cranpose-core = { workspace = true }
+cranpose-runtime-std = { workspace = true }
+cranpose-render-common = { workspace = true }
+cranpose-ui = { workspace = true }
+cranpose-ui-graphics = { workspace = true }
+cranpose-foundation = { workspace = true }
 log = "0.4"
 # WASM-compatible time - web-time is what winit uses internally
 web-time = "1.1"
 
 [dev-dependencies]
-cranpose-macros = { path = "../cranpose-macros" }
+cranpose-macros = { workspace = true }
 
 # Clipboard support (desktop only - not available on WASM or Android)
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]

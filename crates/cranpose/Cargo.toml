@@ -1,7 +1,9 @@
 [package]
-name = "cranpose-app"
+name = "cranpose"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
+description = "Cranpose runtime and UI facade"
 
 [features]
 default = ["desktop", "renderer-wgpu"]
@@ -13,13 +15,13 @@ renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 robot = [] # Enable robot testing support (cranpose-ui now always included)
 
 [dependencies]
-cranpose-app-shell = { path = "../cranpose-app-shell" }
-cranpose-ui = { path = "../cranpose-ui" }
-cranpose-platform-desktop-winit = { path = "../cranpose-platform/desktop-winit", optional = true }
-cranpose-platform-android = { path = "../cranpose-platform/android", optional = true }
-cranpose-platform-web = { path = "../cranpose-platform/web", optional = true }
-cranpose-render-pixels = { path = "../cranpose-render/pixels", optional = true }
-cranpose-render-wgpu = { path = "../cranpose-render/wgpu", optional = true }
+cranpose-app-shell = { workspace = true }
+cranpose-ui = { workspace = true }
+cranpose-platform-desktop-winit = { workspace = true, optional = true }
+cranpose-platform-android = { workspace = true, optional = true }
+cranpose-platform-web = { workspace = true, optional = true }
+cranpose-render-pixels = { workspace = true, optional = true }
+cranpose-render-wgpu = { workspace = true, optional = true }
 pixels = { version = "0.15", optional = true }
 wgpu = { version = "25.0", optional = true }
 pollster = { version = "0.4", optional = true }

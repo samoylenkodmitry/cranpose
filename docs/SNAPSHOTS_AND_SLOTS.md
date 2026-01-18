@@ -39,7 +39,7 @@ The snapshot system implements a sophisticated MVCC mechanism that allows:
 ### Core Files
 
 ```
-crates/compose-core/src/snapshot_v2/
+crates/cranpose-core/src/snapshot_v2/
 ├── mod.rs              - Main types and coordination
 ├── runtime.rs          - Global runtime state
 ├── mutable.rs          - Mutable snapshot implementation
@@ -611,7 +611,7 @@ The slot table manages the composition tree structure using a **gap-buffer** des
 ### Core Files
 
 ```
-crates/compose-core/src/
+crates/cranpose-core/src/
 ├── slot_table.rs                  - Main gap-buffer implementation (1666 lines)
 ├── slot_storage.rs                - Abstract storage trait
 ├── slot_backend.rs                - Backend selection and unified interface

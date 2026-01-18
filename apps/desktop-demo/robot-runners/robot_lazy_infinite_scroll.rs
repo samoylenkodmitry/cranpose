@@ -1,4 +1,4 @@
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{Box, BoxSpec, Button, Column, ColumnSpec, Row, RowSpec, Text};

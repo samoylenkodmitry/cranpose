@@ -5,7 +5,7 @@ pub mod fonts;
 mod tests;
 
 use crate::fonts::DEMO_FONTS;
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 
 fn create_app() -> AppLauncher {
     AppLauncher::new()
@@ -49,6 +49,6 @@ pub async fn run_app() -> Result<(), JsValue> {
     log::info!("Initializing Cranpose app...");
 
     create_app()
-        .run_web("compose-canvas", app::combined_app)
+        .run_web("cranpose-canvas", app::combined_app)
         .await
 }

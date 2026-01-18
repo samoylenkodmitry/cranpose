@@ -5,7 +5,7 @@
 //! cargo run --package desktop-app --example robot_double_click --features robot-app
 //! ```
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use std::time::Duration;

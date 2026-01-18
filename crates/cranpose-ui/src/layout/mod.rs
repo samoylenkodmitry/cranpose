@@ -84,7 +84,7 @@ static NEXT_CACHE_EPOCH: AtomicU64 = AtomicU64::new(1);
 ///
 /// **This function is hidden from public documentation and MUST NOT be called by external code.**
 ///
-/// Only `compose-app-shell` may call this for rare global events:
+/// Only `cranpose-app-shell` may call this for rare global events:
 /// - Window/viewport resize
 /// - Global font scale or density changes
 /// - Debug toggles that affect all layout

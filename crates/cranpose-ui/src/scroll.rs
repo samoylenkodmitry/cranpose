@@ -297,7 +297,9 @@ impl ModifierNode for ScrollNode {
             }));
             self.invalidation_callback_id = Some(callback_id);
         } else {
-            log::error!("ScrollNode attached without a NodeId! Layout invalidation will fail.");
+            log::debug!(
+                "ScrollNode attached without a NodeId; deferring invalidation registration."
+            );
         }
 
         // Initial invalidation

@@ -7,7 +7,7 @@
 //! cargo run --package desktop-app --example robot_lazy_items_rc --features robot-app
 //! ```
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScopeExt, LazyListState};
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;

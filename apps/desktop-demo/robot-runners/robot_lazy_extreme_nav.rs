@@ -8,7 +8,7 @@
 //! cargo run --package desktop-app --example robot_lazy_extreme_nav --features robot-app
 //! ```
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
 use std::time::Duration;
 

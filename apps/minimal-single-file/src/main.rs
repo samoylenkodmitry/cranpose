@@ -42,7 +42,7 @@ impl<T> Owned<T> {
     }
 }
 
-// === Snapshot runtime derived from the main compose-core crate ===
+// === Snapshot runtime derived from the main cranpose-core crate ===
 
 type SnapshotId = usize;
 
@@ -100,7 +100,7 @@ impl<T: Clone> SnapshotMutableState<T> {
     }
 }
 
-// === Slot table extracted from compose-core and trimmed to the essentials ===
+// === Slot table extracted from cranpose-core and trimmed to the essentials ===
 
 #[derive(Default)]
 struct SlotTable {
@@ -186,7 +186,7 @@ impl SlotTable {
     }
 }
 
-// === Simplified runtime extracted from compose-runtime-std ===
+// === Simplified runtime extracted from cranpose-runtime-std ===
 
 #[derive(Clone)]
 struct Runtime {
@@ -257,7 +257,7 @@ impl StdRuntime {
     fn drain_frame_callbacks(&self, _frame_time_nanos: u64) {}
 }
 
-// === Node trait and memory applier extracted from compose-core (trimmed) ===
+// === Node trait and memory applier extracted from cranpose-core (trimmed) ===
 
 trait Node {
     fn mount(&mut self) {}
@@ -463,7 +463,7 @@ fn with_current_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
     })
 }
 
-// === Composition wrapper mimicking compose-core::Composition ===
+// === Composition wrapper mimicking cranpose-core::Composition ===
 
 struct Composition {
     core: Rc<ComposerCore>,
@@ -933,7 +933,7 @@ fn Box(modifier: Modifier) -> NodeId {
     })
 }
 
-// === Render scene traits extracted from compose-render/common ===
+// === Render scene traits extracted from cranpose-render/common ===
 
 enum PointerEventKind {
     Move,
@@ -1128,7 +1128,7 @@ impl Renderer for ConsoleRenderer {
     }
 }
 
-// === AppShell copied and trimmed from compose-app-shell ===
+// === AppShell copied and trimmed from cranpose-app-shell ===
 
 struct AppShell<R>
 where

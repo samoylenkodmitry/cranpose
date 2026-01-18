@@ -6,11 +6,11 @@ license = "Apache-2.0"
 description = "WGPU renderer backend for Cranpose"
 
 [dependencies]
-cranpose-render-common = { path = "../common" }
-cranpose-ui-graphics = { path = "../../cranpose-ui-graphics" }
-cranpose-foundation = { path = "../../cranpose-foundation" }
-cranpose-ui = { path = "../../cranpose-ui" }
-cranpose-core = { path = "../../cranpose-core" }
+cranpose-render-common = { workspace = true }
+cranpose-ui-graphics = { workspace = true }
+cranpose-foundation = { workspace = true }
+cranpose-ui = { workspace = true }
+cranpose-core = { workspace = true }
 # webgl feature enables WebGL backend for WASM builds
 # Default features include platform-appropriate backends (Vulkan/Metal/DX12/GLES)
 wgpu = { version = "25.0", features = ["webgl"] }

@@ -44,7 +44,7 @@ pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
 };
-// Re-export FocusManager from compose-foundation to avoid duplication
+// Re-export FocusManager from cranpose-foundation to avoid duplication
 pub use cranpose_foundation::nodes::input::focus::FocusManager;
 pub use layout::{
     core::{
@@ -74,7 +74,7 @@ pub use primitives::{
     BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, Column, ColumnSpec, ForEach,
     Layout, LayoutNode, Row, RowSpec, Spacer, SubcomposeLayout, Text,
 };
-// Lazy list exports - single source from compose-foundation
+// Lazy list exports - single source from cranpose-foundation
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 pub use render_state::{

@@ -9,7 +9,7 @@
 //! cargo run --package desktop-app --example robot_lazy_varheight_lifecycle --features robot-app
 //! ```
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_core::{DisposableEffect, DisposableEffectResult, MutableState};
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
 use cranpose_macros::composable;

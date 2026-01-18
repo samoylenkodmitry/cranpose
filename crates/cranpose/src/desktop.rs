@@ -865,7 +865,7 @@ impl ApplicationHandler for App {
                 use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, Modifiers};
                 use winit::keyboard::{Key, PhysicalKey};
 
-                // Convert winit key event to compose-ui KeyEvent
+                // Convert winit key event to cranpose-ui KeyEvent
                 let event_type = match event.state {
                     ElementState::Pressed => KeyEventType::KeyDown,
                     ElementState::Released => KeyEventType::KeyUp,

@@ -8,7 +8,7 @@
 //! cargo run --package desktop-app --example robot_lazy_fixes --features robot-app
 //! ```
 
-use cranpose_app::AppLauncher;
+use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 use std::time::Duration;

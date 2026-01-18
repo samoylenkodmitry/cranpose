@@ -1,3 +1,3 @@
-# compose-app-shell
+# cranpose-app-shell
 
 Minimal application shell orchestrating Compose runtime and renderer integration.

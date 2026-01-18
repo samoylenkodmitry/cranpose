@@ -5,7 +5,7 @@
 //! 2. Move cursor over the pointer-reactive area.
 //! 3. Ensure the "Pointer:" coordinates update after moves.
 
-use cranpose_app::{AppLauncher, Robot};
+use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button_in_semantics, find_text_by_prefix_in_semantics};
 use desktop_app::app;
 use std::time::Duration;
@@ -34,7 +34,7 @@ fn fail(robot: &Robot, message: &str) -> ! {
 fn dump_semantics(robot: &Robot, label: &str) {
     if let Ok(semantics) = robot.get_semantics() {
         println!("--- Semantics dump ({}) ---", label);
-        cranpose_app::Robot::print_semantics(&semantics, 0);
+        cranpose::Robot::print_semantics(&semantics, 0);
     }
 }
 

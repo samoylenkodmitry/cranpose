@@ -6,10 +6,10 @@ license = "Apache-2.0"
 description = "Modifiers, nodes, and foundation elements for Cranpose"
 
 [dependencies]
-cranpose-core = { path = "../cranpose-core" }
-cranpose-macros = { path = "../cranpose-macros" }
-cranpose-ui-graphics = { path = "../cranpose-ui-graphics" }
-cranpose-ui-layout = { path = "../cranpose-ui-layout" }
+cranpose-core = { workspace = true }
+cranpose-macros = { workspace = true }
+cranpose-ui-graphics = { workspace = true }
+cranpose-ui-layout = { workspace = true }
 smallvec = "1.13"
 web-time = "1.1"
 log = "0.4"

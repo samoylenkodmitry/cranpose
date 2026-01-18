@@ -5,7 +5,7 @@
 //! cargo run --package desktop-app --example robot_demo --features robot-app
 //! ```
 
-use cranpose_app::{AppLauncher, Robot};
+use cranpose::{AppLauncher, Robot};
 use desktop_app::app;
 use std::time::Duration;
 
