@@ -162,9 +162,43 @@ jobs:
             exit 0
           fi
 
-          cargo generate-lockfile
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
 
-          if git diff --name-only | grep -qvE '^(Cargo\\.toml|Cargo\\.lock)$'; then
+          version = os.environ["TAG_NAME"][1:]
+          lock_path = Path("Cargo.lock")
+          if not lock_path.exists():
+              raise SystemExit("Cargo.lock not found")
+
+          lines = lock_path.read_text().splitlines(keepends=True)
+          in_package = False
+          update_version = False
+
+          for i, line in enumerate(lines):
+              stripped = line.strip()
+              if stripped == "[[package]]":
+                  in_package = True
+                  update_version = False
+                  continue
+              if in_package and stripped.startswith("[") and stripped.endswith("]"):
+                  in_package = False
+                  update_version = False
+                  continue
+              if in_package and stripped.startswith("name = "):
+                  name = stripped.split("=", 1)[1].strip().strip('"')
+                  update_version = name.startswith("cranpose")
+                  continue
+              if in_package and update_version and stripped.startswith("version = "):
+                  indent = re.match(r"^\s*", line).group(0)
+                  lines[i] = f'{indent}version = "{version}"\n'
+                  update_version = False
+
+          lock_path.write_text("".join(lines))
+          PY
+
+          if git diff --name-only | grep -qvE '^(Cargo\.toml|Cargo\.lock)$'; then
             echo "Unexpected changes beyond Cargo.toml/Cargo.lock" >&2
             git diff --name-only
             exit 1
