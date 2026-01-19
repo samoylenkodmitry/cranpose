@@ -305,7 +305,7 @@ jobs:
             except Exception as exc:
                 print(f"Failed to query crates.io for {crate} {version}: {exc}", file=sys.stderr)
                 sys.exit(2)
-PY
+          PY
           }
 
           publish_if_needed() {
