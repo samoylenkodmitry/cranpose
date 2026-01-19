@@ -279,59 +279,65 @@ jobs:
           print(f"Tag v{tag_version} matches workspace version {workspace_version}")
           PY
 
-      - name: Publish cranpose-macros
-        run: cargo publish -p cranpose-macros
+      - name: Publish crates (skip existing versions)
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
 
-      - name: Publish cranpose-core
-        run: cargo publish -p cranpose-core
+          crate_exists() {
+            python - "$1" "$2" <<'PY'
+            import sys
+            import urllib.error
+            import urllib.request
 
-      - name: Publish cranpose-runtime-std
-        run: cargo publish -p cranpose-runtime-std
+            crate, version = sys.argv[1], sys.argv[2]
+            url = f"https://crates.io/api/v1/crates/{crate}/{version}"
+            try:
+                with urllib.request.urlopen(url) as resp:
+                    if resp.status == 200:
+                        sys.exit(0)
+                    sys.exit(2)
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    sys.exit(1)
+                print(f"Unexpected response for {crate} {version}: {exc}", file=sys.stderr)
+                sys.exit(2)
+            except Exception as exc:
+                print(f"Failed to query crates.io for {crate} {version}: {exc}", file=sys.stderr)
+                sys.exit(2)
+PY
+          }
 
-      - name: Publish cranpose-ui-graphics
-        run: cargo publish -p cranpose-ui-graphics
+          publish_if_needed() {
+            local crate="$1"
+            crate_exists "$crate" "$version"
+            local rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "Skipping ${crate} ${version} (already published)."
+              return 0
+            fi
+            if [ "$rc" -ne 1 ]; then
+              echo "Failed to determine publish status for ${crate} ${version}." >&2
+              exit 1
+            fi
+            cargo publish -p "$crate"
+          }
 
-      - name: Publish cranpose-ui-layout
-        run: cargo publish -p cranpose-ui-layout
-
-      - name: Publish cranpose-animation
-        run: cargo publish -p cranpose-animation
-
-      - name: Publish cranpose-foundation
-        run: cargo publish -p cranpose-foundation
-
-      - name: Publish cranpose-ui
-        run: cargo publish -p cranpose-ui
-
-      # Publish render crates
-      - name: Publish cranpose-render-common
-        run: cargo publish -p cranpose-render-common
-
-      - name: Publish cranpose-render-pixels
-        run: cargo publish -p cranpose-render-pixels
-
-      - name: Publish cranpose-render-wgpu
-        run: cargo publish -p cranpose-render-wgpu
-
-      # Publish app and platform crates
-      - name: Publish cranpose-app-shell
-        run: cargo publish -p cranpose-app-shell
-
-      # Publish platform crates
-      - name: Publish cranpose-platform-web
-        run: cargo publish -p cranpose-platform-web
-
-      - name: Publish cranpose-platform-android
-        run: cargo publish -p cranpose-platform-android
-
-      - name: Publish cranpose-platform-desktop-winit
-        run: cargo publish -p cranpose-platform-desktop-winit
-
-      - name: Publish cranpose-assets
-        run: cargo publish -p cranpose-assets
-
-      - name: Publish cranpose
-        run: cargo publish -p cranpose
-
-      - name: Publish cranpose-testing
-        run: cargo publish -p cranpose-testing
+          publish_if_needed cranpose-core
+          publish_if_needed cranpose-macros
+          publish_if_needed cranpose-runtime-std
+          publish_if_needed cranpose-ui-graphics
+          publish_if_needed cranpose-ui-layout
+          publish_if_needed cranpose-animation
+          publish_if_needed cranpose-foundation
+          publish_if_needed cranpose-ui
+          publish_if_needed cranpose-render-common
+          publish_if_needed cranpose-render-pixels
+          publish_if_needed cranpose-render-wgpu
+          publish_if_needed cranpose-app-shell
+          publish_if_needed cranpose-platform-web
+          publish_if_needed cranpose-platform-android
+          publish_if_needed cranpose-platform-desktop-winit
+          publish_if_needed cranpose-assets
+          publish_if_needed cranpose
+          publish_if_needed cranpose-testing
