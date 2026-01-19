@@ -286,25 +286,25 @@ jobs:
 
           crate_exists() {
             python - "$1" "$2" <<'PY'
-            import sys
-            import urllib.error
-            import urllib.request
+          import sys
+          import urllib.error
+          import urllib.request
 
-            crate, version = sys.argv[1], sys.argv[2]
-            url = f"https://crates.io/api/v1/crates/{crate}/{version}"
-            try:
-                with urllib.request.urlopen(url) as resp:
-                    if resp.status == 200:
-                        sys.exit(0)
-                    sys.exit(2)
-            except urllib.error.HTTPError as exc:
-                if exc.code == 404:
-                    sys.exit(1)
-                print(f"Unexpected response for {crate} {version}: {exc}", file=sys.stderr)
-                sys.exit(2)
-            except Exception as exc:
-                print(f"Failed to query crates.io for {crate} {version}: {exc}", file=sys.stderr)
-                sys.exit(2)
+          crate, version = sys.argv[1], sys.argv[2]
+          url = f"https://crates.io/api/v1/crates/{crate}/{version}"
+          try:
+              with urllib.request.urlopen(url) as resp:
+                  if resp.status == 200:
+                      sys.exit(0)
+                  sys.exit(2)
+          except urllib.error.HTTPError as exc:
+              if exc.code == 404:
+                  sys.exit(1)
+              print(f"Unexpected response for {crate} {version}: {exc}", file=sys.stderr)
+              sys.exit(2)
+          except Exception as exc:
+              print(f"Failed to query crates.io for {crate} {version}: {exc}", file=sys.stderr)
+              sys.exit(2)
           PY
           }
 
