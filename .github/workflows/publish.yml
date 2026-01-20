@@ -323,8 +323,8 @@ jobs:
             cargo publish -p "$crate"
           }
 
-          publish_if_needed cranpose-core
           publish_if_needed cranpose-macros
+          publish_if_needed cranpose-core
           publish_if_needed cranpose-runtime-std
           publish_if_needed cranpose-ui-graphics
           publish_if_needed cranpose-ui-layout
