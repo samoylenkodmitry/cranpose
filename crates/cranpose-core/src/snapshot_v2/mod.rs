@@ -28,6 +28,7 @@ use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use crate::snapshot_pinning::{self, PinHandle};
 use crate::state::{StateObject, StateRecord};
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -568,12 +569,12 @@ pub(crate) fn optimistic_merges(
     base_parent_id: SnapshotId,
     modified_objects: &[(StateObjectId, Arc<dyn StateObject>, SnapshotId)],
     invalid_snapshots: &SnapshotIdSet,
-) -> Option<HashMap<usize, Arc<StateRecord>>> {
+) -> Option<HashMap<usize, Rc<StateRecord>>> {
     if modified_objects.is_empty() {
         return None;
     }
 
-    let mut result: Option<HashMap<usize, Arc<StateRecord>>> = None;
+    let mut result: Option<HashMap<usize, Rc<StateRecord>>> = None;
 
     for (_, state, writer_id) in modified_objects.iter() {
         let head = state.first_record();
@@ -594,21 +595,21 @@ pub(crate) fn optimistic_merges(
             continue;
         }
 
-        if Arc::ptr_eq(&current, &previous) {
+        if Rc::ptr_eq(&current, &previous) {
             continue;
         }
 
         let applied = mutable::find_record_by_id(&head, *writer_id)?;
 
         let merged = state.merge_records(
-            Arc::clone(&previous),
-            Arc::clone(&current),
-            Arc::clone(&applied),
+            Rc::clone(&previous),
+            Rc::clone(&current),
+            Rc::clone(&applied),
         )?;
 
         result
             .get_or_insert_with(HashMap::default)
-            .insert(Arc::as_ptr(&current) as usize, merged);
+            .insert(Rc::as_ptr(&current) as usize, merged);
     }
 
     result
@@ -851,7 +852,7 @@ mod tests {
             crate::state::ObjectId(self.id)
         }
 
-        fn first_record(&self) -> Arc<crate::state::StateRecord> {
+        fn first_record(&self) -> Rc<crate::state::StateRecord> {
             unimplemented!("Not needed for observer tests")
         }
 
@@ -859,11 +860,11 @@ mod tests {
             &self,
             _snapshot_id: SnapshotId,
             _invalid: &SnapshotIdSet,
-        ) -> Arc<crate::state::StateRecord> {
+        ) -> Rc<crate::state::StateRecord> {
             unimplemented!("Not needed for observer tests")
         }
 
-        fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
             unimplemented!("Not needed for observer tests")
         }
 
@@ -1220,7 +1221,7 @@ mod tests {
                 crate::state::ObjectId(12345)
             }
 
-            fn first_record(&self) -> Arc<crate::state::StateRecord> {
+            fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!("Not needed for this test")
             }
 
@@ -1228,11 +1229,11 @@ mod tests {
                 &self,
                 _snapshot_id: SnapshotId,
                 _invalid: &SnapshotIdSet,
-            ) -> Arc<crate::state::StateRecord> {
+            ) -> Rc<crate::state::StateRecord> {
                 unimplemented!("Not needed for this test")
             }
 
-            fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
                 unimplemented!("Not needed for this test")
             }
 
@@ -1281,7 +1282,7 @@ mod tests {
                 crate::state::ObjectId(99999)
             }
 
-            fn first_record(&self) -> Arc<crate::state::StateRecord> {
+            fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!()
             }
 
@@ -1289,11 +1290,11 @@ mod tests {
                 &self,
                 _snapshot_id: SnapshotId,
                 _invalid: &SnapshotIdSet,
-            ) -> Arc<crate::state::StateRecord> {
+            ) -> Rc<crate::state::StateRecord> {
                 unimplemented!()
             }
 
-            fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
                 unimplemented!()
             }
 

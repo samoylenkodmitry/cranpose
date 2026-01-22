@@ -3,13 +3,14 @@
 use super::*;
 use crate::collections::map::HashMap;
 use crate::state::{StateRecord, PREEXISTING_SNAPSHOT_ID};
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub(super) fn find_record_by_id(
-    head: &Arc<StateRecord>,
+    head: &Rc<StateRecord>,
     target: SnapshotId,
-) -> Option<Arc<StateRecord>> {
-    let mut cursor = Some(Arc::clone(head));
+) -> Option<Rc<StateRecord>> {
+    let mut cursor = Some(Rc::clone(head));
     while let Some(record) = cursor {
         if !record.is_tombstone() && record.snapshot_id() == target {
             return Some(record);
@@ -20,12 +21,12 @@ pub(super) fn find_record_by_id(
 }
 
 pub(super) fn find_previous_record(
-    head: &Arc<StateRecord>,
+    head: &Rc<StateRecord>,
     base_snapshot_id: SnapshotId,
-) -> (Option<Arc<StateRecord>>, bool) {
-    let mut cursor = Some(Arc::clone(head));
-    let mut best: Option<Arc<StateRecord>> = None;
-    let mut fallback: Option<Arc<StateRecord>> = None;
+) -> (Option<Rc<StateRecord>>, bool) {
+    let mut cursor = Some(Rc::clone(head));
+    let mut best: Option<Rc<StateRecord>> = None;
+    let mut fallback: Option<Rc<StateRecord>> = None;
     let mut found_base = false;
 
     while let Some(record) = cursor {
@@ -58,13 +59,13 @@ enum ApplyOperation {
         object_id: StateObjectId,
         state: Arc<dyn StateObject>,
         source_id: SnapshotId,
-        applied: Arc<StateRecord>,
+        applied: Rc<StateRecord>,
     },
     CommitMerged {
         object_id: StateObjectId,
         state: Arc<dyn StateObject>,
-        merged: Arc<StateRecord>,
-        applied: Arc<StateRecord>,
+        merged: Rc<StateRecord>,
+        applied: Rc<StateRecord>,
     },
 }
 
@@ -315,7 +316,7 @@ impl MutableSnapshot {
                 continue;
             }
 
-            if Arc::ptr_eq(&current, &previous) {
+            if Rc::ptr_eq(&current, &previous) {
                 operations.push(ApplyOperation::PromoteChild {
                     object_id: *obj_id,
                     state: state.clone(),
@@ -326,28 +327,28 @@ impl MutableSnapshot {
 
             let merged = if let Some(candidate) = optimistic
                 .as_ref()
-                .and_then(|map| map.get(&(Arc::as_ptr(&current) as usize)))
+                .and_then(|map| map.get(&(Rc::as_ptr(&current) as usize)))
                 .cloned()
             {
                 candidate
             } else {
                 match state.merge_records(
-                    Arc::clone(&previous),
-                    Arc::clone(&current),
-                    Arc::clone(&applied),
+                    Rc::clone(&previous),
+                    Rc::clone(&current),
+                    Rc::clone(&applied),
                 ) {
                     Some(record) => record,
                     None => return SnapshotApplyResult::Failure,
                 }
             };
 
-            if Arc::ptr_eq(&merged, &applied) {
+            if Rc::ptr_eq(&merged, &applied) {
                 operations.push(ApplyOperation::PromoteChild {
                     object_id: *obj_id,
                     state: state.clone(),
                     writer_id: *writer_id,
                 });
-            } else if Arc::ptr_eq(&merged, &current) {
+            } else if Rc::ptr_eq(&merged, &current) {
                 operations.push(ApplyOperation::PromoteExisting {
                     object_id: *obj_id,
                     state: state.clone(),
@@ -560,7 +561,7 @@ mod tests {
             crate::state::ObjectId(0)
         }
 
-        fn first_record(&self) -> Arc<crate::state::StateRecord> {
+        fn first_record(&self) -> Rc<crate::state::StateRecord> {
             unimplemented!("Not needed for tests")
         }
 
@@ -568,11 +569,11 @@ mod tests {
             &self,
             _snapshot_id: crate::snapshot_id_set::SnapshotId,
             _invalid: &SnapshotIdSet,
-        ) -> Arc<crate::state::StateRecord> {
+        ) -> Rc<crate::state::StateRecord> {
             unimplemented!("Not needed for tests")
         }
 
-        fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
             unimplemented!("Not needed for tests")
         }
 

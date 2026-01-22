@@ -335,6 +335,7 @@ mod tests {
     fn test_transparent_observer_snapshot_write_panics() {
         use crate::state::StateObject;
         use std::cell::Cell;
+        use std::rc::Rc;
 
         let _guard = reset_runtime();
 
@@ -348,7 +349,7 @@ mod tests {
                 crate::state::ObjectId(0)
             }
 
-            fn first_record(&self) -> Arc<crate::state::StateRecord> {
+            fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!("Not needed for tests")
             }
 
@@ -356,11 +357,11 @@ mod tests {
                 &self,
                 _snapshot_id: crate::snapshot_id_set::SnapshotId,
                 _invalid: &SnapshotIdSet,
-            ) -> Arc<crate::state::StateRecord> {
+            ) -> Rc<crate::state::StateRecord> {
                 unimplemented!("Not needed for tests")
             }
 
-            fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
                 unimplemented!("Not needed for tests")
             }
 

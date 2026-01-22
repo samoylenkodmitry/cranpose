@@ -146,13 +146,14 @@ mod tests {
     use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
     use crate::state::ObjectId;
     use std::cell::Cell;
+    use std::rc::Rc;
     use std::sync::RwLock;
 
     // Mock StateObject for testing
     struct MockState {
         id: ObjectId,
         value: Cell<i32>,
-        head: RwLock<Arc<crate::state::StateRecord>>,
+        head: RwLock<Rc<crate::state::StateRecord>>,
     }
 
     impl MockState {
@@ -175,7 +176,7 @@ mod tests {
             self.id
         }
 
-        fn first_record(&self) -> Arc<crate::state::StateRecord> {
+        fn first_record(&self) -> Rc<crate::state::StateRecord> {
             self.head.read().unwrap().clone()
         }
 
@@ -183,11 +184,11 @@ mod tests {
             &self,
             _snapshot_id: SnapshotId,
             _invalid: &SnapshotIdSet,
-        ) -> Arc<crate::state::StateRecord> {
+        ) -> Rc<crate::state::StateRecord> {
             self.head.read().unwrap().clone()
         }
 
-        fn prepend_state_record(&self, record: Arc<crate::state::StateRecord>) {
+        fn prepend_state_record(&self, record: Rc<crate::state::StateRecord>) {
             *self.head.write().unwrap() = record;
         }
 

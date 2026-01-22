@@ -12,9 +12,11 @@
 use cranpose::AppLauncher;
 use cranpose_core::useState;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::text::TextFieldState;
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::widgets::{
-    Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
+    BasicTextField, Box, BoxSpec, Button, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row,
+    RowSpec, Text,
 };
 use cranpose_ui::{composable, Color, LinearArrangement, Modifier};
 use std::time::{Duration, Instant};
@@ -29,7 +31,14 @@ const DEFAULT_MAX_GROWTH_KB: u64 = 32 * 1024;
 fn PerfHarnessApp() {
     let toggle = useState(|| false);
     let counter = useState(|| 0u64);
+    let dense = useState(|| false);
+    let input_version = useState(|| 0u64);
+    let input_state =
+        cranpose_core::remember(|| TextFieldState::new("Type here...")).with(|state| state.clone());
     let list_state = remember_lazy_list_state();
+    let dense_mode = dense.get();
+    let item_height = if dense_mode { 30.0 } else { 36.0 };
+    let item_count = if dense_mode { 500 } else { 300 };
 
     Column(
         Modifier::empty()
@@ -38,11 +47,14 @@ fn PerfHarnessApp() {
             .background(Color(0.08, 0.08, 0.1, 1.0)),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
+            let input_state = input_state.clone();
+            let input_state_for_row = input_state.clone();
             Text("Perf Harness".to_string(), Modifier::empty());
             Row(
                 Modifier::empty(),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
+                    let input_state = input_state_for_row.clone();
                     Button(
                         Modifier::empty().background(Color(0.2, 0.4, 0.7, 1.0)),
                         move || {
@@ -53,6 +65,29 @@ fn PerfHarnessApp() {
                             Text("Toggle".to_string(), Modifier::empty());
                         },
                     );
+                    Button(
+                        Modifier::empty().background(Color(0.25, 0.5, 0.4, 1.0)),
+                        move || {
+                            dense.set(!dense.get());
+                        },
+                        || {
+                            Text("Density".to_string(), Modifier::empty());
+                        },
+                    );
+                    {
+                        let input_state = input_state.clone();
+                        Button(
+                            Modifier::empty().background(Color(0.5, 0.3, 0.5, 1.0)),
+                            move || {
+                                let next = input_version.get().saturating_add(1);
+                                input_version.set(next);
+                                input_state.set_text(format!("Input {}", next));
+                            },
+                            || {
+                                Text("Text+".to_string(), Modifier::empty());
+                            },
+                        );
+                    }
                     Text(
                         format!("Counter: {}", counter.get()),
                         Modifier::empty().padding(4.0),
@@ -65,17 +100,34 @@ fn PerfHarnessApp() {
                 format!("Toggle State: {}", toggle_label),
                 Modifier::empty().padding(2.0),
             );
+            let density_label = if dense.get() { "ON" } else { "OFF" };
+            Text(
+                format!("Density: {}", density_label),
+                Modifier::empty().padding(2.0),
+            );
+            {
+                let input_state = input_state.clone();
+                let state = input_state.clone();
+                BasicTextField(
+                    state,
+                    Modifier::empty()
+                        .fill_max_width()
+                        .padding(6.0)
+                        .background(Color(0.12, 0.14, 0.2, 1.0))
+                        .rounded_corners(6.0),
+                );
+            }
 
             LazyColumn(
                 Modifier::empty()
                     .fill_max_width()
-                    .height(420.0)
+                    .height(360.0)
                     .background(Color(0.05, 0.05, 0.08, 1.0)),
                 list_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                 |scope| {
                     scope.items(
-                        300,
+                        item_count,
                         Some(|i: usize| i as u64),
                         None::<fn(usize) -> u64>,
                         move |i| {
@@ -87,12 +139,27 @@ fn PerfHarnessApp() {
                             Box(
                                 Modifier::empty()
                                     .fill_max_width()
-                                    .height(36.0)
+                                    .height(item_height)
                                     .padding(6.0)
-                                    .background(bg),
+                                    .background(bg)
+                                    .rounded_corners(4.0),
                                 BoxSpec::new(),
                                 move || {
-                                    Text(format!("Item {}", i), Modifier::empty());
+                                    Row(
+                                        Modifier::empty(),
+                                        RowSpec::new().horizontal_arrangement(
+                                            LinearArrangement::SpacedBy(8.0),
+                                        ),
+                                        move || {
+                                            Text(format!("Item {}", i), Modifier::empty());
+                                            if dense_mode {
+                                                Text(
+                                                    format!("Detail {}", i * 3),
+                                                    Modifier::empty(),
+                                                );
+                                            }
+                                        },
+                                    );
                                 },
                             );
                         },
@@ -181,6 +248,20 @@ fn main() {
                     let _ = robot.exit();
                     std::process::exit(1);
                 });
+            let density_center = find_button_in_semantics(&robot, "Density")
+                .map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
+                .unwrap_or_else(|| {
+                    eprintln!("FATAL: Density button not found");
+                    let _ = robot.exit();
+                    std::process::exit(1);
+                });
+            let text_center = find_button_in_semantics(&robot, "Text+")
+                .map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
+                .unwrap_or_else(|| {
+                    eprintln!("FATAL: Text+ button not found");
+                    let _ = robot.exit();
+                    std::process::exit(1);
+                });
 
             let total_duration = Duration::from_secs(duration_secs + warmup_secs);
             let warmup_duration = Duration::from_secs(warmup_secs);
@@ -190,20 +271,29 @@ fn main() {
             let mut peak_rss_kb = 0u64;
             let mut sample_count = 0u64;
             let mut direction_down = true;
+            let mut iteration = 0u64;
 
             let start = Instant::now();
             while start.elapsed() < total_duration {
-                let (from_y, to_y) = if direction_down {
-                    (560.0, 220.0)
+                if iteration % 4 == 0 {
+                    if let Err(err) = fast_fling(&robot, 450.0, 520.0, 240.0, 6, 8) {
+                        eprintln!("FATAL: Fling failed: {}", err);
+                        let _ = robot.exit();
+                        std::process::exit(1);
+                    }
                 } else {
-                    (220.0, 560.0)
-                };
-                direction_down = !direction_down;
+                    let (from_y, to_y) = if direction_down {
+                        (560.0, 220.0)
+                    } else {
+                        (220.0, 560.0)
+                    };
+                    direction_down = !direction_down;
 
-                if let Err(err) = robot.drag(450.0, from_y, 450.0, to_y) {
-                    eprintln!("FATAL: Drag failed: {}", err);
-                    let _ = robot.exit();
-                    std::process::exit(1);
+                    if let Err(err) = robot.drag(450.0, from_y, 450.0, to_y) {
+                        eprintln!("FATAL: Drag failed: {}", err);
+                        let _ = robot.exit();
+                        std::process::exit(1);
+                    }
                 }
 
                 if let Err(err) = robot.click(toggle_center.0, toggle_center.1) {
@@ -211,8 +301,23 @@ fn main() {
                     let _ = robot.exit();
                     std::process::exit(1);
                 }
+                if iteration % 3 == 0 {
+                    if let Err(err) = robot.click(text_center.0, text_center.1) {
+                        eprintln!("FATAL: Text+ click failed: {}", err);
+                        let _ = robot.exit();
+                        std::process::exit(1);
+                    }
+                }
+                if iteration % 5 == 0 {
+                    if let Err(err) = robot.click(density_center.0, density_center.1) {
+                        eprintln!("FATAL: Density click failed: {}", err);
+                        let _ = robot.exit();
+                        std::process::exit(1);
+                    }
+                }
 
                 let _ = robot.wait_for_idle();
+                iteration = iteration.saturating_add(1);
 
                 let elapsed = start.elapsed();
                 if baseline_rss_kb.is_none() && elapsed >= warmup_duration {
@@ -256,4 +361,23 @@ fn main() {
             robot.exit().ok();
         })
         .run(PerfHarnessApp);
+}
+
+fn fast_fling(
+    robot: &cranpose::Robot,
+    x: f32,
+    start_y: f32,
+    end_y: f32,
+    steps: u32,
+    step_delay_ms: u64,
+) -> Result<(), String> {
+    robot.mouse_move(x, start_y)?;
+    robot.mouse_down()?;
+    for step in 1..=steps {
+        let t = step as f32 / steps as f32;
+        let y = start_y + (end_y - start_y) * t;
+        robot.mouse_move(x, y)?;
+        std::thread::sleep(Duration::from_millis(step_delay_ms));
+    }
+    robot.mouse_up()
 }

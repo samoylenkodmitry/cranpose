@@ -327,6 +327,7 @@ impl NestedMutableSnapshot {
 mod tests {
     use super::*;
     use crate::snapshot_v2::runtime::TestRuntimeGuard;
+    use std::rc::Rc;
 
     fn reset_runtime() -> TestRuntimeGuard {
         reset_runtime_for_tests()
@@ -408,17 +409,17 @@ mod tests {
             fn object_id(&self) -> crate::state::ObjectId {
                 self.id
             }
-            fn first_record(&self) -> Arc<crate::state::StateRecord> {
+            fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!("not used in v2 tests")
             }
             fn readable_record(
                 &self,
                 _snapshot_id: crate::snapshot_id_set::SnapshotId,
                 _invalid: &SnapshotIdSet,
-            ) -> Arc<crate::state::StateRecord> {
+            ) -> Rc<crate::state::StateRecord> {
                 unimplemented!("not used in v2 tests")
             }
-            fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
                 unimplemented!("not used in v2 tests")
             }
             fn promote_record(
@@ -456,17 +457,17 @@ mod tests {
             fn object_id(&self) -> crate::state::ObjectId {
                 self.id
             }
-            fn first_record(&self) -> Arc<crate::state::StateRecord> {
+            fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!("not used in v2 tests")
             }
             fn readable_record(
                 &self,
                 _snapshot_id: crate::snapshot_id_set::SnapshotId,
                 _invalid: &SnapshotIdSet,
-            ) -> Arc<crate::state::StateRecord> {
+            ) -> Rc<crate::state::StateRecord> {
                 unimplemented!("not used in v2 tests")
             }
-            fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
                 unimplemented!("not used in v2 tests")
             }
             fn promote_record(

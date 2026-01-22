@@ -2030,13 +2030,10 @@ impl<'a> ModifierChainNodeRef<'a> {
 
     /// Returns the capability mask for this specific node.
     pub fn kind_set(&self) -> NodeCapabilities {
-        self.with_state(|state| {
-            if state.is_sentinel() {
-                NodeCapabilities::empty()
-            } else {
-                state.capabilities()
-            }
-        })
+        match &self.link {
+            NodeLink::Head | NodeLink::Tail => NodeCapabilities::empty(),
+            NodeLink::Entry(_) => self.with_state(|state| state.capabilities()),
+        }
     }
 
     /// Returns the entry index backing this node when it is part of the chain.
@@ -2076,7 +2073,7 @@ impl<'a> ModifierChainNodeRef<'a> {
 
     /// Returns true if this reference targets either sentinel.
     pub fn is_sentinel(&self) -> bool {
-        self.with_state(|state| state.is_sentinel())
+        matches!(self.link, NodeLink::Head | NodeLink::Tail)
     }
 
     /// Returns true if this node has any capability bits present in `mask`.
