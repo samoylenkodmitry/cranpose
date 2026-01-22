@@ -383,41 +383,41 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
     while let Some(record) = current {
         let current_id = record.snapshot_id();
 
-        if current_id != INVALID_SNAPSHOT_ID {
-            if current_id < reuse_limit {
-                if valid_record.is_none() {
-                    // If any records are below reuse_limit, we must keep the highest one
-                    // so the lowest snapshot can select it
-                    valid_record = Some(Rc::clone(&record));
-                    retained_records += 1;
-                } else {
-                    // We have two records below the reuse limit - one obscures the other
-                    // Overwrite the older one (lower snapshot_id)
-                    let valid = valid_record.as_ref().unwrap();
-                    let record_to_overwrite = if current_id < valid.snapshot_id() {
-                        Rc::clone(&record)
-                    } else {
-                        // Keep current as valid, overwrite the previous valid
-                        let to_overwrite = Rc::clone(valid);
-                        valid_record = Some(Rc::clone(&record));
-                        to_overwrite
-                    };
-
-                    // Lazily find a young record to copy data from
-                    if overwrite_record.is_none() {
-                        // Find the youngest record, or first record >= reuseLimit
-                        overwrite_record =
-                            Some(find_youngest_or(&head, |r| r.snapshot_id() >= reuse_limit));
-                    }
-
-                    // Mark the old record as invalid and copy valid data into it
-                    record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
-                    record_to_overwrite.assign_value::<T>(overwrite_record.as_ref().unwrap());
-                }
-            } else {
-                // Record is above reuse limit - it's still visible and must be kept
+        if current_id == INVALID_SNAPSHOT_ID {
+            // Already invalid, skip
+        } else if current_id < reuse_limit {
+            if valid_record.is_none() {
+                // If any records are below reuse_limit, we must keep the highest one
+                // so the lowest snapshot can select it
+                valid_record = Some(Rc::clone(&record));
                 retained_records += 1;
+            } else {
+                // We have two records below the reuse limit - one obscures the other
+                // Overwrite the older one (lower snapshot_id)
+                let valid = valid_record.as_ref().unwrap();
+                let record_to_overwrite = if current_id < valid.snapshot_id() {
+                    Rc::clone(&record)
+                } else {
+                    // Keep current as valid, overwrite the previous valid
+                    let to_overwrite = Rc::clone(valid);
+                    valid_record = Some(Rc::clone(&record));
+                    to_overwrite
+                };
+
+                // Lazily find a young record to copy data from
+                if overwrite_record.is_none() {
+                    // Find the youngest record, or first record >= reuseLimit
+                    overwrite_record =
+                        Some(find_youngest_or(&head, |r| r.snapshot_id() >= reuse_limit));
+                }
+
+                // Mark the old record as invalid and copy valid data into it
+                record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
+                record_to_overwrite.assign_value::<T>(overwrite_record.as_ref().unwrap());
             }
+        } else {
+            // Record is above reuse limit - it's still visible and must be kept
+            retained_records += 1;
         }
 
         current = record.next();

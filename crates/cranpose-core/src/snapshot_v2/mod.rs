@@ -429,9 +429,9 @@ thread_local! {
     static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
 }
 
-const UNUSED_RECORD_CLEANUP_INTERVAL: SnapshotId = 8;
-const UNUSED_RECORD_CLEANUP_BUSY_INTERVAL: SnapshotId = 2;
-const UNUSED_RECORD_CLEANUP_MIN_SIZE: usize = 256;
+const UNUSED_RECORD_CLEANUP_INTERVAL: SnapshotId = 2;
+const UNUSED_RECORD_CLEANUP_BUSY_INTERVAL: SnapshotId = 1;
+const UNUSED_RECORD_CLEANUP_MIN_SIZE: usize = 64;
 
 thread_local! {
     static LAST_UNUSED_RECORD_CLEANUP: Cell<SnapshotId> = const { Cell::new(0) };
@@ -691,7 +691,26 @@ impl SnapshotState {
         write_observer: Option<WriteObserver>,
         runtime_tracked: bool,
     ) -> Self {
-        let pin_handle = snapshot_pinning::track_pinning(id, &invalid);
+        Self::new_with_pinning(id, invalid, read_observer, write_observer, runtime_tracked, true)
+    }
+
+    /// Create a new SnapshotState with optional pinning control.
+    /// 
+    /// Transparent snapshots should pass `should_pin: false` since they don't allocate
+    /// new IDs and shouldn't prevent garbage collection of old records.
+    pub(crate) fn new_with_pinning(
+        id: SnapshotId,
+        invalid: SnapshotIdSet,
+        read_observer: Option<ReadObserver>,
+        write_observer: Option<WriteObserver>,
+        runtime_tracked: bool,
+        should_pin: bool,
+    ) -> Self {
+        let pin_handle = if should_pin {
+            snapshot_pinning::track_pinning(id, &invalid)
+        } else {
+            snapshot_pinning::PinHandle::INVALID
+        };
         Self {
             id: Cell::new(id),
             invalid: RefCell::new(invalid),
