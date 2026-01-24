@@ -12,7 +12,7 @@ Cranpose is a Jetpack Compose-inspired declarative UI framework.
 
 ## 🌐 Live Demo
 
-**[Try it in your browser!](https://samoylenkodmitry.github.io/cranpose/)**
+**[Try it in your browser!](https://samoylenkodmitry.github.io/Cranpose/)**
 
 The demo showcases the full Cranpose framework running in the browser via WebAssembly and WebGL2.
 
