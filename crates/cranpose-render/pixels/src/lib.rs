@@ -59,4 +59,15 @@ impl Renderer for PixelsRenderer {
         pipeline::render_layout_tree(layout_tree.root(), &mut self.scene);
         Ok(())
     }
+
+    fn rebuild_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        _viewport: Size,
+    ) -> Result<(), Self::Error> {
+        self.scene.clear();
+        pipeline::render_from_applier(applier, root, &mut self.scene);
+        Ok(())
+    }
 }

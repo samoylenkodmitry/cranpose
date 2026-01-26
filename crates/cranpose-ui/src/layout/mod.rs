@@ -570,10 +570,18 @@ pub fn measure_layout(
 
     // Root node has no parent to place it, so we must explicitly place it at (0,0).
     // This ensures is_placed=true, allowing the renderer to traverse the tree.
+    // Handle both LayoutNode and SubcomposeLayoutNode as potential roots.
     if let Ok(mut applier) = applier_host.try_borrow_typed() {
-        let _ = applier.with_node::<LayoutNode, _>(root, |node| {
-            node.set_position(Point::default());
-        });
+        if applier
+            .with_node::<LayoutNode, _>(root, |node| {
+                node.set_position(Point::default());
+            })
+            .is_err()
+        {
+            let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
+                node.set_position(Point::default());
+            });
+        }
     }
 
     // ---- Metadata ----------------------------------------------------------
@@ -691,11 +699,39 @@ impl LayoutBuilderState {
         })
     }
 
+    /// Clears the is_placed flag for a node at the start of measurement.
+    /// This ensures nodes that drop out of placement won't render with stale geometry.
+    fn clear_node_placed(state_rc: &Rc<RefCell<Self>>, node_id: NodeId) {
+        let host = {
+            let state = state_rc.borrow();
+            Rc::clone(&state.applier)
+        };
+        let Ok(mut applier) = host.try_borrow_typed() else {
+            return;
+        };
+        // Try LayoutNode first, then SubcomposeLayoutNode
+        if applier
+            .with_node::<LayoutNode, _>(node_id, |node| {
+                node.clear_placed();
+            })
+            .is_err()
+        {
+            let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                node.clear_placed();
+            });
+        }
+    }
+
     fn measure_node(
         state_rc: Rc<RefCell<Self>>,
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
+        // Clear is_placed at the start of measurement.
+        // Nodes that are placed will have is_placed set to true via Placeable::place().
+        // Nodes that drop out of placement (not placed this pass) will remain is_placed=false.
+        Self::clear_node_placed(&state_rc, node_id);
+
         // Try SubcomposeLayoutNode first
         if let Some(subcompose) =
             Self::try_measure_subcompose(Rc::clone(&state_rc), node_id, constraints)?
