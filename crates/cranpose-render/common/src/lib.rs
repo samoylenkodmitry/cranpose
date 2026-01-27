@@ -64,17 +64,13 @@ pub trait Renderer {
     /// Rebuilds the scene by traversing the LayoutNode tree directly via Applier.
     ///
     /// This is the new architecture that eliminates per-frame LayoutTree reconstruction.
-    /// Implementors should read layout state from LayoutNode.layout_state() directly.
-    ///
-    /// Default implementation panics - implementors must upgrade to support this.
+    /// Implementors must read layout state from LayoutNode.layout_state() directly.
     fn rebuild_scene_from_applier(
         &mut self,
-        _applier: &mut cranpose_core::MemoryApplier,
-        _root: cranpose_core::NodeId,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        panic!("rebuild_scene_from_applier not implemented - renderer must be upgraded for direct LayoutNode rendering")
-    }
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        viewport: Size,
+    ) -> Result<(), Self::Error>;
 
     /// Draw a development overlay (e.g., FPS counter) on top of the scene.
     ///
