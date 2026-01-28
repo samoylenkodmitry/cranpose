@@ -633,6 +633,11 @@ where
         }
     }
 
+    #[cfg(all(not(target_os = "linux"), not(target_arch = "wasm32")))]
+    pub fn get_primary_selection(&mut self) -> Option<String> {
+        None
+    }
+
     /// Syncs the current text field selection to PRIMARY (Linux X11).
     /// Call this when selection changes in a text field.
     pub fn sync_selection_to_primary(&mut self) {
