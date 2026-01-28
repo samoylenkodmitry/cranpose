@@ -50,7 +50,10 @@ pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifier};
-pub use slices::{collect_modifier_slices, collect_slices_from_modifier, ModifierNodeSlices};
+pub use slices::{
+    collect_modifier_slices, collect_modifier_slices_into, collect_slices_from_modifier,
+    ModifierNodeSlices,
+};
 // Test accessibility for fling velocity (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]
 pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
@@ -257,6 +260,59 @@ impl<'a> Iterator for ModifierElementIterator<'a> {
             }
 
             // Pop next modifier from stack
+            let next_modifier = self.stack.pop()?;
+            self.push_modifier(next_modifier);
+        }
+    }
+}
+
+/// Iterator over inspector metadata that traverses the tree without allocation.
+pub(crate) struct ModifierInspectorIterator<'a> {
+    stack: Vec<&'a Modifier>,
+    current_inspector: Option<(&'a [InspectorMetadata], usize)>,
+}
+
+impl<'a> ModifierInspectorIterator<'a> {
+    fn new(modifier: &'a Modifier) -> Self {
+        let mut iter = Self {
+            stack: Vec::new(),
+            current_inspector: None,
+        };
+        iter.push_modifier(modifier);
+        iter
+    }
+
+    fn push_modifier(&mut self, modifier: &'a Modifier) {
+        match &modifier.kind {
+            ModifierKind::Empty => {}
+            ModifierKind::Single { inspector, .. } => {
+                if !inspector.is_empty() {
+                    self.current_inspector = Some((inspector.as_slice(), 0));
+                }
+            }
+            ModifierKind::Combined { outer, inner } => {
+                // Push inner first so outer is processed first (stack is LIFO)
+                self.stack.push(inner.as_ref());
+                self.push_modifier(outer.as_ref());
+            }
+        }
+    }
+}
+
+impl<'a> Iterator for ModifierInspectorIterator<'a> {
+    type Item = &'a InspectorMetadata;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some((inspector, index)) = &mut self.current_inspector {
+                if *index < inspector.len() {
+                    let metadata = &inspector[*index];
+                    *index += 1;
+                    return Some(metadata);
+                }
+                self.current_inspector = None;
+            }
+
             let next_modifier = self.stack.pop()?;
             self.push_modifier(next_modifier);
         }
@@ -509,6 +565,10 @@ impl Modifier {
     /// in-place using a stack-based approach.
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
         ModifierElementIterator::new(self)
+    }
+
+    pub(crate) fn iter_inspector_metadata(&self) -> ModifierInspectorIterator<'_> {
+        ModifierInspectorIterator::new(self)
     }
 
     /// Returns the flattened list of elements in this modifier chain.

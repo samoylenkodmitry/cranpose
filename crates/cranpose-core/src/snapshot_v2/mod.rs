@@ -28,6 +28,7 @@ use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use crate::snapshot_pinning::{self, PinHandle};
 use crate::state::{StateObject, StateRecord};
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -428,6 +429,14 @@ thread_local! {
     static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
 }
 
+const UNUSED_RECORD_CLEANUP_INTERVAL: SnapshotId = 2;
+const UNUSED_RECORD_CLEANUP_BUSY_INTERVAL: SnapshotId = 1;
+const UNUSED_RECORD_CLEANUP_MIN_SIZE: usize = 64;
+
+thread_local! {
+    static LAST_UNUSED_RECORD_CLEANUP: Cell<SnapshotId> = const { Cell::new(0) };
+}
+
 /// Register an apply observer.
 ///
 /// Returns a handle that will automatically unregister the observer when dropped.
@@ -514,6 +523,27 @@ pub(crate) fn check_and_overwrite_unused_records_locked() {
     });
 }
 
+pub(crate) fn maybe_check_and_overwrite_unused_records_locked(current_snapshot_id: SnapshotId) {
+    let should_run = EXTRA_STATE_OBJECTS.with(|cell| {
+        let set = cell.borrow();
+        if set.is_empty() {
+            return false;
+        }
+        let last_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(|last| last.get());
+        let interval = if set.len() >= UNUSED_RECORD_CLEANUP_MIN_SIZE {
+            UNUSED_RECORD_CLEANUP_BUSY_INTERVAL
+        } else {
+            UNUSED_RECORD_CLEANUP_INTERVAL
+        };
+        current_snapshot_id.saturating_sub(last_cleanup) >= interval
+    });
+
+    if should_run {
+        LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.set(current_snapshot_id));
+        check_and_overwrite_unused_records_locked();
+    }
+}
+
 /// Process a state object for unused record cleanup, tracking it if needed.
 ///
 /// Mirrors Kotlin's `processForUnusedRecordsLocked()`. After a state is modified:
@@ -529,17 +559,22 @@ pub(crate) fn process_for_unused_records_locked(state: &Arc<dyn crate::state::St
     }
 }
 
+#[cfg(test)]
+pub(crate) fn clear_unused_record_cleanup_for_tests() {
+    LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.set(0));
+}
+
 pub(crate) fn optimistic_merges(
     current_snapshot_id: SnapshotId,
     base_parent_id: SnapshotId,
     modified_objects: &[(StateObjectId, Arc<dyn StateObject>, SnapshotId)],
     invalid_snapshots: &SnapshotIdSet,
-) -> Option<HashMap<usize, Arc<StateRecord>>> {
+) -> Option<HashMap<usize, Rc<StateRecord>>> {
     if modified_objects.is_empty() {
         return None;
     }
 
-    let mut result: Option<HashMap<usize, Arc<StateRecord>>> = None;
+    let mut result: Option<HashMap<usize, Rc<StateRecord>>> = None;
 
     for (_, state, writer_id) in modified_objects.iter() {
         let head = state.first_record();
@@ -560,21 +595,21 @@ pub(crate) fn optimistic_merges(
             continue;
         }
 
-        if Arc::ptr_eq(&current, &previous) {
+        if Rc::ptr_eq(&current, &previous) {
             continue;
         }
 
         let applied = mutable::find_record_by_id(&head, *writer_id)?;
 
         let merged = state.merge_records(
-            Arc::clone(&previous),
-            Arc::clone(&current),
-            Arc::clone(&applied),
+            Rc::clone(&previous),
+            Rc::clone(&current),
+            Rc::clone(&applied),
         )?;
 
         result
             .get_or_insert_with(HashMap::default)
-            .insert(Arc::as_ptr(&current) as usize, merged);
+            .insert(Rc::as_ptr(&current) as usize, merged);
     }
 
     result
@@ -656,7 +691,33 @@ impl SnapshotState {
         write_observer: Option<WriteObserver>,
         runtime_tracked: bool,
     ) -> Self {
-        let pin_handle = snapshot_pinning::track_pinning(id, &invalid);
+        Self::new_with_pinning(
+            id,
+            invalid,
+            read_observer,
+            write_observer,
+            runtime_tracked,
+            true,
+        )
+    }
+
+    /// Create a new SnapshotState with optional pinning control.
+    ///
+    /// Transparent snapshots should pass `should_pin: false` since they don't allocate
+    /// new IDs and shouldn't prevent garbage collection of old records.
+    pub(crate) fn new_with_pinning(
+        id: SnapshotId,
+        invalid: SnapshotIdSet,
+        read_observer: Option<ReadObserver>,
+        write_observer: Option<WriteObserver>,
+        runtime_tracked: bool,
+        should_pin: bool,
+    ) -> Self {
+        let pin_handle = if should_pin {
+            snapshot_pinning::track_pinning(id, &invalid)
+        } else {
+            snapshot_pinning::PinHandle::INVALID
+        };
         Self {
             id: Cell::new(id),
             invalid: RefCell::new(invalid),
@@ -817,7 +878,7 @@ mod tests {
             crate::state::ObjectId(self.id)
         }
 
-        fn first_record(&self) -> Arc<crate::state::StateRecord> {
+        fn first_record(&self) -> Rc<crate::state::StateRecord> {
             unimplemented!("Not needed for observer tests")
         }
 
@@ -825,11 +886,11 @@ mod tests {
             &self,
             _snapshot_id: SnapshotId,
             _invalid: &SnapshotIdSet,
-        ) -> Arc<crate::state::StateRecord> {
+        ) -> Rc<crate::state::StateRecord> {
             unimplemented!("Not needed for observer tests")
         }
 
-        fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
             unimplemented!("Not needed for observer tests")
         }
 
@@ -1186,7 +1247,7 @@ mod tests {
                 crate::state::ObjectId(12345)
             }
 
-            fn first_record(&self) -> Arc<crate::state::StateRecord> {
+            fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!("Not needed for this test")
             }
 
@@ -1194,11 +1255,11 @@ mod tests {
                 &self,
                 _snapshot_id: SnapshotId,
                 _invalid: &SnapshotIdSet,
-            ) -> Arc<crate::state::StateRecord> {
+            ) -> Rc<crate::state::StateRecord> {
                 unimplemented!("Not needed for this test")
             }
 
-            fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
                 unimplemented!("Not needed for this test")
             }
 
@@ -1247,7 +1308,7 @@ mod tests {
                 crate::state::ObjectId(99999)
             }
 
-            fn first_record(&self) -> Arc<crate::state::StateRecord> {
+            fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!()
             }
 
@@ -1255,11 +1316,11 @@ mod tests {
                 &self,
                 _snapshot_id: SnapshotId,
                 _invalid: &SnapshotIdSet,
-            ) -> Arc<crate::state::StateRecord> {
+            ) -> Rc<crate::state::StateRecord> {
                 unimplemented!()
             }
 
-            fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
                 unimplemented!()
             }
 

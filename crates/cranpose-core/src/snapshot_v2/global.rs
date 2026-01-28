@@ -19,9 +19,13 @@ pub struct GlobalSnapshot {
 
 impl GlobalSnapshot {
     /// Create a new global snapshot.
+    ///
+    /// The global snapshot does NOT pin because it always represents the current state
+    /// and reads the latest records. Pinning would prevent garbage collection.
     pub fn new(id: SnapshotId, invalid: SnapshotIdSet) -> Arc<Self> {
         Arc::new(Self {
-            state: SnapshotState::new(id, invalid, None, None, false),
+            // Global snapshot doesn't pin - it always reads current state
+            state: SnapshotState::new_with_pinning(id, invalid, None, None, false, false),
             nested_count: Cell::new(0),
         })
     }
@@ -35,7 +39,10 @@ impl GlobalSnapshot {
                 let invalid = super::runtime::open_snapshots();
                 *snapshot = Some(GlobalSnapshot::new(id, invalid));
             }
-            snapshot.as_ref().unwrap().clone()
+            snapshot
+                .as_ref()
+                .expect("GlobalSnapshot must be initialized before use")
+                .clone()
         })
     }
 
@@ -192,8 +199,8 @@ impl GlobalSnapshot {
 pub fn advance_global_snapshot(new_id: SnapshotId) {
     let global = GlobalSnapshot::get_or_create();
     global.advance(new_id);
-    // Clean up unused records after advancing
-    super::check_and_overwrite_unused_records_locked();
+    // Periodically clean up unused records after advancing
+    super::maybe_check_and_overwrite_unused_records_locked(new_id);
 }
 
 /// Get the current global snapshot ID.

@@ -16,6 +16,8 @@ use std::hash::{Hash, Hasher};
 use std::ops::{BitOr, BitOrAssign};
 use std::rc::Rc;
 
+use smallvec::SmallVec;
+
 pub use cranpose_ui_graphics::DrawScope;
 pub use cranpose_ui_graphics::Size;
 pub use cranpose_ui_layout::{Constraints, Measurable};
@@ -157,31 +159,37 @@ impl ModifierNodeContext for BasicModifierNodeContext {
     }
 }
 
+/// Path to a node within a modifier chain, supporting delegate navigation.
+/// Uses SmallVec to avoid heap allocation for paths with 0-2 delegates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NodePath {
     entry: usize,
-    delegates: Vec<usize>,
+    delegates: SmallVec<[usize; 2]>,
 }
 
 impl NodePath {
+    #[inline]
     fn root(entry: usize) -> Self {
         Self {
             entry,
-            delegates: Vec::new(),
+            delegates: SmallVec::new(),
         }
     }
 
+    #[inline]
     fn from_slice(entry: usize, path: &[usize]) -> Self {
         Self {
             entry,
-            delegates: path.to_vec(),
+            delegates: SmallVec::from_slice(path),
         }
     }
 
+    #[inline]
     fn entry(&self) -> usize {
         self.entry
     }
 
+    #[inline]
     fn delegates(&self) -> &[usize] {
         &self.delegates
     }
@@ -242,6 +250,7 @@ impl NodeState {
         self.capabilities.set(capabilities);
     }
 
+    #[inline]
     pub fn capabilities(&self) -> NodeCapabilities {
         self.capabilities.get()
     }
@@ -250,6 +259,7 @@ impl NodeState {
         self.aggregate_child_capabilities.set(capabilities);
     }
 
+    #[inline]
     pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
         self.aggregate_child_capabilities.get()
     }
@@ -258,6 +268,7 @@ impl NodeState {
         *self.parent.borrow_mut() = parent;
     }
 
+    #[inline]
     pub(crate) fn parent_link(&self) -> Option<NodeLink> {
         self.parent.borrow().clone()
     }
@@ -266,6 +277,7 @@ impl NodeState {
         *self.child.borrow_mut() = child;
     }
 
+    #[inline]
     pub(crate) fn child_link(&self) -> Option<NodeLink> {
         self.child.borrow().clone()
     }
@@ -980,6 +992,7 @@ impl<'a> ModifierChainIter<'a> {
 impl<'a> Iterator for ModifierChainIter<'a> {
     type Item = ModifierChainNodeRef<'a>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.next.take()?;
         if current.is_sentinel() {
@@ -2017,12 +2030,14 @@ impl<'a> ModifierChainNodeRef<'a> {
     }
 
     /// Returns the parent reference, including sentinel head when applicable.
+    #[inline]
     pub fn parent(&self) -> Option<Self> {
         self.with_state(|state| state.parent_link())
             .map(|link| self.chain.make_node_ref(link))
     }
 
     /// Returns the child reference, including sentinel tail for the last entry.
+    #[inline]
     pub fn child(&self) -> Option<Self> {
         self.with_state(|state| state.child_link())
             .map(|link| self.chain.make_node_ref(link))
@@ -2030,13 +2045,10 @@ impl<'a> ModifierChainNodeRef<'a> {
 
     /// Returns the capability mask for this specific node.
     pub fn kind_set(&self) -> NodeCapabilities {
-        self.with_state(|state| {
-            if state.is_sentinel() {
-                NodeCapabilities::empty()
-            } else {
-                state.capabilities()
-            }
-        })
+        match &self.link {
+            NodeLink::Head | NodeLink::Tail => NodeCapabilities::empty(),
+            NodeLink::Entry(_) => self.with_state(|state| state.capabilities()),
+        }
     }
 
     /// Returns the entry index backing this node when it is part of the chain.
@@ -2076,7 +2088,7 @@ impl<'a> ModifierChainNodeRef<'a> {
 
     /// Returns true if this reference targets either sentinel.
     pub fn is_sentinel(&self) -> bool {
-        self.with_state(|state| state.is_sentinel())
+        matches!(self.link, NodeLink::Head | NodeLink::Tail)
     }
 
     /// Returns true if this node has any capability bits present in `mask`.

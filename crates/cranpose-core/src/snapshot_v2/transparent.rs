@@ -33,7 +33,16 @@ impl TransparentObserverMutableSnapshot {
         parent: Option<Weak<TransparentObserverMutableSnapshot>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            state: SnapshotState::new(id, invalid, read_observer, write_observer, false),
+            // Transparent snapshots don't allocate new IDs, so they shouldn't pin
+            // to prevent garbage collection of old records
+            state: SnapshotState::new_with_pinning(
+                id,
+                invalid,
+                read_observer,
+                write_observer,
+                false,
+                false,
+            ),
             parent,
             nested_count: Cell::new(0),
             applied: Cell::new(false),
@@ -196,7 +205,8 @@ impl TransparentObserverSnapshot {
         parent: Option<Weak<TransparentObserverSnapshot>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            state: SnapshotState::new(id, invalid, read_observer, None, false),
+            // Transparent snapshots don't allocate new IDs, so they shouldn't pin
+            state: SnapshotState::new_with_pinning(id, invalid, read_observer, None, false, false),
             parent,
             reusable: Cell::new(true),
         })
@@ -335,6 +345,7 @@ mod tests {
     fn test_transparent_observer_snapshot_write_panics() {
         use crate::state::StateObject;
         use std::cell::Cell;
+        use std::rc::Rc;
 
         let _guard = reset_runtime();
 
@@ -348,7 +359,7 @@ mod tests {
                 crate::state::ObjectId(0)
             }
 
-            fn first_record(&self) -> Arc<crate::state::StateRecord> {
+            fn first_record(&self) -> Rc<crate::state::StateRecord> {
                 unimplemented!("Not needed for tests")
             }
 
@@ -356,11 +367,11 @@ mod tests {
                 &self,
                 _snapshot_id: crate::snapshot_id_set::SnapshotId,
                 _invalid: &SnapshotIdSet,
-            ) -> Arc<crate::state::StateRecord> {
+            ) -> Rc<crate::state::StateRecord> {
                 unimplemented!("Not needed for tests")
             }
 
-            fn prepend_state_record(&self, _record: Arc<crate::state::StateRecord>) {
+            fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {
                 unimplemented!("Not needed for tests")
             }
 

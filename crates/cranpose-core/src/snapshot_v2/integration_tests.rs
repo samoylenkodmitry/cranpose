@@ -7,6 +7,7 @@
 use super::*;
 use crate::snapshot_v2::runtime::TestRuntimeGuard;
 use crate::state::{MutationPolicy, NeverEqual, SnapshotMutableState, StateRecord};
+use std::rc::Rc;
 use std::sync::Arc;
 
 fn reset_runtime() -> TestRuntimeGuard {
@@ -141,7 +142,7 @@ mod tests {
         let snap1_invalid = snap1.invalid();
         let readable = state.readable_record(snap1_id, &snap1_invalid);
         assert!(
-            Arc::ptr_eq(&readable, &invalid_record),
+            Rc::ptr_eq(&readable, &invalid_record),
             "Writable reuse should provide the recycled record as the readable head for the snapshot"
         );
 
@@ -189,7 +190,7 @@ mod tests {
         let head = state.first_record();
         let current =
             crate::state::readable_record_for(&head, global.snapshot_id(), &invalid).unwrap();
-        let key = Arc::as_ptr(&current) as usize;
+        let key = Rc::as_ptr(&current) as usize;
 
         let merged = optimistic.get(&key).expect("merged value present");
         let merged_value = merged.with_value(|value: &i32| *value);

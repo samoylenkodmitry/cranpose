@@ -1,10 +1,11 @@
-// StateRecord uses Arc with Cell for single-threaded shared ownership in the snapshot system.
+// StateRecord uses Rc with Cell for single-threaded shared ownership in the snapshot system.
 #![allow(clippy::arc_with_non_send_sync)]
 
 use crate::collections::map::HashSet;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, Weak};
 
 use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
 use crate::snapshot_pinning::lowest_pinned_snapshot;
@@ -37,27 +38,26 @@ impl ObjectId {
 ///
 /// # Thread Safety
 /// Contains `Cell<T>` which is not `Send`/`Sync`. This is safe because state records
-/// are accessed only from the UI thread via thread-local snapshot system. The `Arc`
+/// are accessed only from the UI thread via thread-local snapshot system. The `Rc`
 /// is used for cheap cloning and shared ownership within a single thread.
-#[allow(clippy::arc_with_non_send_sync)]
 pub struct StateRecord {
     snapshot_id: Cell<SnapshotId>,
     tombstone: Cell<bool>,
-    next: Cell<Option<Arc<StateRecord>>>,
-    value: RwLock<Option<Box<dyn Any>>>,
+    next: Cell<Option<Rc<StateRecord>>>,
+    value: RefCell<Option<Box<dyn Any>>>,
 }
 
 impl StateRecord {
     pub(crate) fn new<T: Any>(
         snapshot_id: SnapshotId,
         value: T,
-        next: Option<Arc<StateRecord>>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+        next: Option<Rc<StateRecord>>,
+    ) -> Rc<Self> {
+        Rc::new(Self {
             snapshot_id: Cell::new(snapshot_id),
             tombstone: Cell::new(false),
             next: Cell::new(next),
-            value: RwLock::new(Some(Box::new(value))),
+            value: RefCell::new(Some(Box::new(value))),
         })
     }
 
@@ -72,14 +72,14 @@ impl StateRecord {
     }
 
     #[inline]
-    pub(crate) fn next(&self) -> Option<Arc<StateRecord>> {
-        self.next.take().inspect(|arc| {
-            self.next.set(Some(Arc::clone(arc)));
+    pub(crate) fn next(&self) -> Option<Rc<StateRecord>> {
+        self.next.take().inspect(|record| {
+            self.next.set(Some(Rc::clone(record)));
         })
     }
 
     #[inline]
-    pub(crate) fn set_next(&self, next: Option<Arc<StateRecord>>) {
+    pub(crate) fn set_next(&self, next: Option<Rc<StateRecord>>) {
         self.next.set(next);
     }
 
@@ -94,18 +94,15 @@ impl StateRecord {
     }
 
     pub(crate) fn clear_value(&self) {
-        self.value
-            .write()
-            .expect("StateRecord lock poisoned")
-            .take();
+        self.value.borrow_mut().take();
     }
 
     pub(crate) fn replace_value<T: Any>(&self, new_value: T) {
-        *self.value.write().expect("StateRecord lock poisoned") = Some(Box::new(new_value));
+        *self.value.borrow_mut() = Some(Box::new(new_value));
     }
 
     pub(crate) fn with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        let guard = self.value.read().expect("StateRecord lock poisoned");
+        let guard = self.value.borrow();
         let value = guard
             .as_ref()
             .and_then(|boxed| boxed.downcast_ref::<T>())
@@ -135,9 +132,32 @@ impl StateRecord {
     }
 }
 
+impl Drop for StateRecord {
+    fn drop(&mut self) {
+        // Prevent recursive drop of deep chains which can cause stack overflow.
+        // We iteratively detach and drop the next record if we are the sole owner.
+        let mut next = self.next.take();
+        while let Some(node) = next {
+            match Rc::try_unwrap(node) {
+                Ok(record) => {
+                    // We were the last owner. Take its next pointer to continue the loop.
+                    // The record itself will be dropped here, but since next is None,
+                    // it won't recurse.
+                    next = record.next.take();
+                }
+                Err(_) => {
+                    // Someone else holds a reference to this node.
+                    // The chain destruction stops here.
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[inline]
 fn record_is_valid_for(
-    record: &Arc<StateRecord>,
+    record: &Rc<StateRecord>,
     snapshot_id: SnapshotId,
     invalid: &SnapshotIdSet,
 ) -> bool {
@@ -154,12 +174,16 @@ fn record_is_valid_for(
 }
 
 pub(crate) fn readable_record_for(
-    head: &Arc<StateRecord>,
+    head: &Rc<StateRecord>,
     snapshot_id: SnapshotId,
     invalid: &SnapshotIdSet,
-) -> Option<Arc<StateRecord>> {
-    let mut best: Option<Arc<StateRecord>> = None;
-    let mut cursor = Some(Arc::clone(head));
+) -> Option<Rc<StateRecord>> {
+    if record_is_valid_for(head, snapshot_id, invalid) {
+        return Some(Rc::clone(head));
+    }
+
+    let mut best: Option<Rc<StateRecord>> = None;
+    let mut cursor = Some(Rc::clone(head));
 
     while let Some(record) = cursor {
         if record_is_valid_for(&record, snapshot_id, invalid) {
@@ -168,7 +192,7 @@ pub(crate) fn readable_record_for(
                 .map(|current| current.snapshot_id() < record.snapshot_id())
                 .unwrap_or(true);
             if replace {
-                best = Some(Arc::clone(&record));
+                best = Some(Rc::clone(&record));
             }
         }
         cursor = record.next();
@@ -182,19 +206,19 @@ pub(crate) fn readable_record_for(
 /// Searches the record chain starting from the given head:
 /// - If a record matches the predicate, returns it immediately
 /// - Otherwise, tracks the youngest record (highest snapshot_id) and returns it
-fn find_youngest_or<F>(head: &Arc<StateRecord>, predicate: F) -> Arc<StateRecord>
+fn find_youngest_or<F>(head: &Rc<StateRecord>, predicate: F) -> Rc<StateRecord>
 where
-    F: Fn(&Arc<StateRecord>) -> bool,
+    F: Fn(&Rc<StateRecord>) -> bool,
 {
-    let mut current = Some(Arc::clone(head));
-    let mut youngest = Arc::clone(head);
+    let mut current = Some(Rc::clone(head));
+    let mut youngest = Rc::clone(head);
 
     while let Some(record) = current {
         if predicate(&record) {
             return record;
         }
         if youngest.snapshot_id() < record.snapshot_id() {
-            youngest = Arc::clone(&record);
+            youngest = Rc::clone(&record);
         }
         current = record.next();
     }
@@ -213,9 +237,9 @@ where
 ///
 /// Note: PREEXISTING records (snapshot_id=1) are never reused to maintain the ability
 /// for all snapshots to read the initial state.
-pub(crate) fn used_locked(head: &Arc<StateRecord>) -> Option<Arc<StateRecord>> {
-    let mut current = Some(Arc::clone(head));
-    let mut valid_record: Option<Arc<StateRecord>> = None;
+pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
+    let mut current = Some(Rc::clone(head));
+    let mut valid_record: Option<Rc<StateRecord>> = None;
 
     // Calculate reuse limit: records below this ID are invisible to all open snapshots
     let reuse_limit = lowest_pinned_snapshot()
@@ -238,6 +262,10 @@ pub(crate) fn used_locked(head: &Arc<StateRecord>) -> Option<Arc<StateRecord>> {
             return Some(record);
         }
 
+        if record.is_tombstone() && current_id < reuse_limit {
+            return Some(record);
+        }
+
         // Check if this record is valid for snapshots at or below the reuse limit
         if record_is_valid_for(&record, reuse_limit, &invalid) {
             if let Some(ref existing) = valid_record {
@@ -246,7 +274,7 @@ pub(crate) fn used_locked(head: &Arc<StateRecord>) -> Option<Arc<StateRecord>> {
                 return Some(if current_id < existing.snapshot_id() {
                     record
                 } else {
-                    Arc::clone(existing)
+                    Rc::clone(existing)
                 });
             } else {
                 // First valid record below reuse limit - keep looking
@@ -271,7 +299,7 @@ pub(crate) fn used_locked(head: &Arc<StateRecord>) -> Option<Arc<StateRecord>> {
 /// Returns a record that is either:
 /// - A reused record (if `used_locked()` found one), marked with SNAPSHOT_ID_MAX
 /// - A newly created record, prepended to the state's record chain via `prepend_state_record()`
-pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Arc<StateRecord> {
+pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Rc<StateRecord> {
     let state_head = state.first_record();
 
     // Try to reuse an existing record
@@ -291,8 +319,58 @@ pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Arc<Sta
     );
 
     // Prepend the new record to the state's chain
-    state.prepend_state_record(Arc::clone(&new_record));
+    state.prepend_state_record(Rc::clone(&new_record));
 
+    new_record
+}
+
+/// Creates an overwritable record and ensures it is the head of the record chain.
+///
+/// This is used for global snapshot writes where the newest record must be at the head
+/// to keep tombstoning logic consistent. Reused records are unlinked from their current
+/// position before being prepended.
+pub(crate) fn new_overwritable_record_as_head_locked(state: &dyn StateObject) -> Rc<StateRecord> {
+    let head = state.first_record();
+
+    if let Some(reusable) = used_locked(&head) {
+        reusable.set_snapshot_id(SNAPSHOT_ID_MAX);
+
+        if !Rc::ptr_eq(&head, &reusable) {
+            let mut cursor = Some(Rc::clone(&head));
+            let mut unlinked = false;
+
+            while let Some(node) = cursor {
+                let next = node.next();
+                if let Some(next_record) = next {
+                    if Rc::ptr_eq(&next_record, &reusable) {
+                        node.set_next(reusable.next());
+                        unlinked = true;
+                        break;
+                    }
+                    cursor = Some(next_record);
+                } else {
+                    break;
+                }
+            }
+
+            if !unlinked {
+                debug_assert!(
+                    false,
+                    "new_overwritable_record_as_head_locked: reusable record not found in chain"
+                );
+                let new_record = StateRecord::new(SNAPSHOT_ID_MAX, (), None);
+                state.prepend_state_record(Rc::clone(&new_record));
+                return new_record;
+            }
+
+            state.prepend_state_record(Rc::clone(&reusable));
+        }
+
+        return reusable;
+    }
+
+    let new_record = StateRecord::new(SNAPSHOT_ID_MAX, (), None);
+    state.prepend_state_record(Rc::clone(&new_record));
     new_record
 }
 
@@ -311,9 +389,9 @@ pub(crate) fn new_overwritable_record_locked(state: &dyn StateObject) -> Arc<Sta
 /// `false` if it can be removed from tracking.
 pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateObject) -> bool {
     let head = state.first_record();
-    let mut current = Some(Arc::clone(&head));
-    let mut overwrite_record: Option<Arc<StateRecord>> = None;
-    let mut valid_record: Option<Arc<StateRecord>> = None;
+    let mut current = Some(Rc::clone(&head));
+    let mut overwrite_record: Option<Rc<StateRecord>> = None;
+    let mut valid_record: Option<Rc<StateRecord>> = None;
 
     // Calculate reuse limit: records below this ID are invisible to all open snapshots
     // Mirrors Kotlin's: val reuseLimit = pinningTable.lowestOrDefault(nextSnapshotId)
@@ -325,41 +403,41 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
     while let Some(record) = current {
         let current_id = record.snapshot_id();
 
-        if current_id != INVALID_SNAPSHOT_ID {
-            if current_id < reuse_limit {
-                if valid_record.is_none() {
-                    // If any records are below reuse_limit, we must keep the highest one
-                    // so the lowest snapshot can select it
-                    valid_record = Some(Arc::clone(&record));
-                    retained_records += 1;
-                } else {
-                    // We have two records below the reuse limit - one obscures the other
-                    // Overwrite the older one (lower snapshot_id)
-                    let valid = valid_record.as_ref().unwrap();
-                    let record_to_overwrite = if current_id < valid.snapshot_id() {
-                        Arc::clone(&record)
-                    } else {
-                        // Keep current as valid, overwrite the previous valid
-                        let to_overwrite = Arc::clone(valid);
-                        valid_record = Some(Arc::clone(&record));
-                        to_overwrite
-                    };
-
-                    // Lazily find a young record to copy data from
-                    if overwrite_record.is_none() {
-                        // Find the youngest record, or first record >= reuseLimit
-                        overwrite_record =
-                            Some(find_youngest_or(&head, |r| r.snapshot_id() >= reuse_limit));
-                    }
-
-                    // Mark the old record as invalid and copy valid data into it
-                    record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
-                    record_to_overwrite.assign_value::<T>(overwrite_record.as_ref().unwrap());
-                }
-            } else {
-                // Record is above reuse limit - it's still visible and must be kept
+        if current_id == INVALID_SNAPSHOT_ID {
+            // Already invalid, skip
+        } else if current_id < reuse_limit {
+            if valid_record.is_none() {
+                // If any records are below reuse_limit, we must keep the highest one
+                // so the lowest snapshot can select it
+                valid_record = Some(Rc::clone(&record));
                 retained_records += 1;
+            } else {
+                // We have two records below the reuse limit - one obscures the other
+                // Overwrite the older one (lower snapshot_id)
+                let valid = valid_record.as_ref().unwrap();
+                let record_to_overwrite = if current_id < valid.snapshot_id() {
+                    Rc::clone(&record)
+                } else {
+                    // Keep current as valid, overwrite the previous valid
+                    let to_overwrite = Rc::clone(valid);
+                    valid_record = Some(Rc::clone(&record));
+                    to_overwrite
+                };
+
+                // Lazily find a young record to copy data from
+                if overwrite_record.is_none() {
+                    // Find the youngest record, or first record >= reuseLimit
+                    overwrite_record =
+                        Some(find_youngest_or(&head, |r| r.snapshot_id() >= reuse_limit));
+                }
+
+                // Mark the old record as invalid and copy valid data into it
+                record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
+                record_to_overwrite.assign_value::<T>(overwrite_record.as_ref().unwrap());
             }
+        } else {
+            // Record is above reuse limit - it's still visible and must be kept
+            retained_records += 1;
         }
 
         current = record.next();
@@ -391,25 +469,24 @@ impl<T> MutationPolicy<T> for NeverEqual {
 
 pub trait StateObject: Any {
     fn object_id(&self) -> ObjectId;
-    fn first_record(&self) -> Arc<StateRecord>;
-    fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet)
-        -> Arc<StateRecord>;
+    fn first_record(&self) -> Rc<StateRecord>;
+    fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord>;
 
     /// Prepends a record to the head of the record chain.
     /// This is used when reusing records - the record's next pointer is updated to point to the current head,
     /// and the head is updated to point to the new record.
-    fn prepend_state_record(&self, record: Arc<StateRecord>);
+    fn prepend_state_record(&self, record: Rc<StateRecord>);
 
     fn merge_records(
         &self,
-        _previous: Arc<StateRecord>,
-        _current: Arc<StateRecord>,
-        _applied: Arc<StateRecord>,
-    ) -> Option<Arc<StateRecord>> {
+        _previous: Rc<StateRecord>,
+        _current: Rc<StateRecord>,
+        _applied: Rc<StateRecord>,
+    ) -> Option<Rc<StateRecord>> {
         None
     }
 
-    fn commit_merged_record(&self, _merged: Arc<StateRecord>) -> Result<SnapshotId, &'static str> {
+    fn commit_merged_record(&self, _merged: Rc<StateRecord>) -> Result<SnapshotId, &'static str> {
         Err("StateObject does not support merged record commits")
     }
     fn promote_record(&self, child_id: SnapshotId) -> Result<(), &'static str>;
@@ -427,7 +504,7 @@ pub trait StateObject: Any {
 }
 
 pub(crate) struct SnapshotMutableState<T> {
-    head: RwLock<Arc<StateRecord>>,
+    head: RefCell<Rc<StateRecord>>,
     policy: Arc<dyn MutationPolicy<T>>,
     id: ObjectId,
     weak_self: Mutex<Option<Weak<Self>>>,
@@ -436,18 +513,21 @@ pub(crate) struct SnapshotMutableState<T> {
 
 impl<T> SnapshotMutableState<T> {
     fn assert_chain_integrity(&self, caller: &str, snapshot_context: Option<SnapshotId>) {
-        let head = self.head.read().expect("State head lock poisoned").clone();
+        if !should_check_chain_integrity() {
+            return;
+        }
+        let head = self.head.borrow().clone();
         let mut cursor = Some(head);
         let mut seen: HashSet<usize> = HashSet::default();
         let mut ids = Vec::new();
 
         while let Some(record) = cursor {
-            let addr = Arc::as_ptr(&record) as usize;
+            let addr = Rc::as_ptr(&record) as usize;
             assert!(
                 seen.insert(addr),
                 "SnapshotMutableState::{} detected duplicate/cycle at record {:p} for state {:?} (snapshot_context={:?}, chain_ids={:?})",
                 caller,
-                Arc::as_ptr(&record),
+                Rc::as_ptr(&record),
                 self.id,
                 snapshot_context,
                 ids
@@ -466,25 +546,35 @@ impl<T> SnapshotMutableState<T> {
     }
 }
 
+fn should_check_chain_integrity() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        true
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        use std::sync::OnceLock;
+        static CHECK: OnceLock<bool> = OnceLock::new();
+        *CHECK.get_or_init(|| std::env::var_os("CRANPOSE_ASSERT_STATE_CHAIN").is_some())
+    }
+}
+
 impl<T: Clone + 'static> SnapshotMutableState<T> {
     fn readable_for(
         &self,
         snapshot_id: SnapshotId,
         invalid: &SnapshotIdSet,
-    ) -> Option<Arc<StateRecord>> {
+    ) -> Option<Rc<StateRecord>> {
         let head = self.first_record();
         readable_record_for(&head, snapshot_id, invalid)
     }
 
-    fn writable_record(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Arc<StateRecord> {
+    fn writable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
         let readable = match self.readable_for(snapshot_id, invalid) {
             Some(record) => record,
             None => {
-                let mut head_guard = self.head.write().expect("State head lock poisoned");
+                let mut head_guard = self.head.borrow_mut();
                 let current_head = head_guard.clone();
                 let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
                 let source = refreshed.unwrap_or_else(|| current_head.clone());
@@ -507,7 +597,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         }
 
         let refreshed = {
-            let head_guard = self.head.read().expect("State head lock poisoned");
+            let head_guard = self.head.borrow();
             let current_head = head_guard.clone();
             let refreshed = readable_record_for(&current_head, snapshot_id, invalid).unwrap_or_else(
                 || {
@@ -522,7 +612,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 return refreshed;
             }
 
-            Arc::clone(&refreshed)
+            Rc::clone(&refreshed)
         };
 
         let overwritable = new_overwritable_record_locked(self);
@@ -543,7 +633,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         let head = StateRecord::new(snapshot_id, initial, Some(tail));
 
         let mut state = Arc::new(Self {
-            head: RwLock::new(head),
+            head: RefCell::new(head),
             policy,
             id: ObjectId::default(),
             weak_self: Mutex::new(None),
@@ -662,8 +752,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
         match &snapshot {
             AnySnapshot::Global(global) => {
-                let mut head_guard = self.head.write().expect("State head lock poisoned");
-                let head = head_guard.clone();
                 if global.has_pending_children() {
                     panic!(
                         "SnapshotMutableState::set attempted global write while pending children {:?} exist (state {:?}, snapshot_id={})",
@@ -674,9 +762,10 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 }
 
                 let new_id = allocate_record_id();
-                let record = StateRecord::new(new_id, new_value, Some(head));
-                *head_guard = record.clone();
-                drop(head_guard);
+                let record = new_overwritable_record_as_head_locked(self);
+                record.replace_value(new_value);
+                record.set_snapshot_id(new_id);
+                record.set_tombstone(false);
                 advance_global_snapshot(new_id);
                 self.assert_chain_integrity("set(global-push)", Some(snapshot_id));
 
@@ -781,7 +870,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         &self,
         snapshot_id: SnapshotId,
         invalid: &SnapshotIdSet,
-    ) -> Option<Arc<StateRecord>> {
+    ) -> Option<Rc<StateRecord>> {
         self.readable_for(snapshot_id, invalid)
     }
 }
@@ -791,15 +880,11 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         self.id
     }
 
-    fn first_record(&self) -> Arc<StateRecord> {
-        self.head.read().expect("State head lock poisoned").clone()
+    fn first_record(&self) -> Rc<StateRecord> {
+        self.head.borrow().clone()
     }
 
-    fn readable_record(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Arc<StateRecord> {
+    fn readable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
         self.try_readable_record(snapshot_id, invalid)
             .unwrap_or_else(|| {
                 panic!(
@@ -809,8 +894,8 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
             })
     }
 
-    fn prepend_state_record(&self, record: Arc<StateRecord>) {
-        let mut head_guard = self.head.write().expect("State head lock poisoned");
+    fn prepend_state_record(&self, record: Rc<StateRecord>) {
+        let mut head_guard = self.head.borrow_mut();
         let current_head = head_guard.clone();
         record.set_next(Some(current_head));
         *head_guard = record;
@@ -818,10 +903,10 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
 
     fn merge_records(
         &self,
-        previous: Arc<StateRecord>,
-        current: Arc<StateRecord>,
-        applied: Arc<StateRecord>,
-    ) -> Option<Arc<StateRecord>> {
+        previous: Rc<StateRecord>,
+        current: Rc<StateRecord>,
+        applied: Rc<StateRecord>,
+    ) -> Option<Rc<StateRecord>> {
         let current_vs_applied = current.with_value(|current: &T| {
             applied.with_value(|applied_value: &T| self.policy.equivalent(current, applied_value))
         });
@@ -847,7 +932,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
             if record.snapshot_id() == child_id {
                 let cloned = record.with_value(|value: &T| value.clone());
                 let new_id = allocate_record_id();
-                let mut head_guard = self.head.write().expect("State head lock poisoned");
+                let mut head_guard = self.head.borrow_mut();
                 let current_head = head_guard.clone();
                 let new_head = StateRecord::new(new_id, cloned, Some(current_head));
                 *head_guard = new_head;
@@ -865,10 +950,10 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         );
     }
 
-    fn commit_merged_record(&self, merged: Arc<StateRecord>) -> Result<SnapshotId, &'static str> {
+    fn commit_merged_record(&self, merged: Rc<StateRecord>) -> Result<SnapshotId, &'static str> {
         let value = merged.with_value(|value: &T| value.clone());
         let new_id = allocate_record_id();
-        let mut head_guard = self.head.write().expect("State head lock poisoned");
+        let mut head_guard = self.head.borrow_mut();
         let current_head = head_guard.clone();
         let new_head = StateRecord::new(new_id, value, Some(current_head));
         *head_guard = new_head;
@@ -893,8 +978,8 @@ mod tests {
     use super::*;
 
     /// Helper to create a chain of records for testing
-    fn create_record_chain(ids: &[SnapshotId]) -> Arc<StateRecord> {
-        let mut head: Option<Arc<StateRecord>> = None;
+    fn create_record_chain(ids: &[SnapshotId]) -> Rc<StateRecord> {
+        let mut head: Option<Rc<StateRecord>> = None;
 
         // Build chain in reverse order (last ID becomes the tail)
         for &id in ids.iter().rev() {
@@ -905,11 +990,11 @@ mod tests {
     }
 
     struct ManualState {
-        head: Arc<StateRecord>,
+        head: Rc<StateRecord>,
     }
 
     impl ManualState {
-        fn new(head: Arc<StateRecord>) -> Self {
+        fn new(head: Rc<StateRecord>) -> Self {
             Self { head }
         }
     }
@@ -919,15 +1004,15 @@ mod tests {
             ObjectId(999)
         }
 
-        fn first_record(&self) -> Arc<StateRecord> {
-            Arc::clone(&self.head)
+        fn first_record(&self) -> Rc<StateRecord> {
+            Rc::clone(&self.head)
         }
 
-        fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Arc<StateRecord> {
-            Arc::clone(&self.head)
+        fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Rc<StateRecord> {
+            Rc::clone(&self.head)
         }
 
-        fn prepend_state_record(&self, _: Arc<StateRecord>) {}
+        fn prepend_state_record(&self, _: Rc<StateRecord>) {}
 
         fn promote_record(&self, _: SnapshotId) -> Result<(), &'static str> {
             Ok(())
@@ -1049,7 +1134,7 @@ mod tests {
         let result = new_overwritable_record_locked(&*state);
 
         // Should reuse the INVALID record
-        assert!(Arc::ptr_eq(&result, &invalid_rec));
+        assert!(Rc::ptr_eq(&result, &invalid_rec));
         assert_eq!(result.snapshot_id(), SNAPSHOT_ID_MAX);
     }
 
@@ -1073,15 +1158,15 @@ mod tests {
         // Should be prepended to the chain (becomes new head)
         let new_head = state.first_record();
         assert!(
-            Arc::ptr_eq(&new_head, &result),
+            Rc::ptr_eq(&new_head, &result),
             "new_head ({:p}) should equal result ({:p})",
-            Arc::as_ptr(&new_head),
-            Arc::as_ptr(&result)
+            Rc::as_ptr(&new_head),
+            Rc::as_ptr(&result)
         );
 
         // The new record should point to the old head
         assert!(result.next().is_some());
-        assert!(Arc::ptr_eq(&result.next().unwrap(), &old_head));
+        assert!(Rc::ptr_eq(&result.next().unwrap(), &old_head));
     }
 
     #[test]
@@ -1099,7 +1184,7 @@ mod tests {
         let result = state.writable_record(snapshot_id, &SnapshotIdSet::EMPTY);
 
         assert!(
-            Arc::ptr_eq(&result, &invalid),
+            Rc::ptr_eq(&result, &invalid),
             "Expected writable_record to reuse the INVALID record"
         );
         assert_eq!(result.snapshot_id(), snapshot_id);
@@ -1124,11 +1209,11 @@ mod tests {
         let result = state.writable_record(snapshot_id, &SnapshotIdSet::EMPTY);
 
         assert!(
-            !Arc::ptr_eq(&result, &original_head),
+            !Rc::ptr_eq(&result, &original_head),
             "Should not reuse the current head when reuse is disallowed"
         );
         assert!(
-            !Arc::ptr_eq(&result, &preexisting),
+            !Rc::ptr_eq(&result, &preexisting),
             "Should not reuse the PREEXISTING record"
         );
         assert_eq!(result.snapshot_id(), snapshot_id);
@@ -1136,7 +1221,7 @@ mod tests {
 
         let new_head = state.first_record();
         assert!(
-            Arc::ptr_eq(&new_head, &result),
+            Rc::ptr_eq(&new_head, &result),
             "Newly created record should become the head of the chain"
         );
 
@@ -1199,19 +1284,19 @@ mod tests {
 
         // Mock state object for testing
         struct TestState {
-            head: Arc<StateRecord>,
+            head: Rc<StateRecord>,
         }
         impl StateObject for TestState {
             fn object_id(&self) -> ObjectId {
                 ObjectId(999)
             }
-            fn first_record(&self) -> Arc<StateRecord> {
-                Arc::clone(&self.head)
+            fn first_record(&self) -> Rc<StateRecord> {
+                Rc::clone(&self.head)
             }
-            fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Arc<StateRecord> {
-                Arc::clone(&self.head)
+            fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Rc<StateRecord> {
+                Rc::clone(&self.head)
             }
-            fn prepend_state_record(&self, _: Arc<StateRecord>) {}
+            fn prepend_state_record(&self, _: Rc<StateRecord>) {}
             fn promote_record(&self, _: SnapshotId) -> Result<(), &'static str> {
                 Ok(())
             }
